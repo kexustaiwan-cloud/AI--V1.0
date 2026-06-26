@@ -190,10 +190,41 @@
   }
   .btn-logout:hover { background: var(--red-bg); color: var(--red-text); border-color: transparent; }
 
+
+  /* ── Top progress bar ── */
+  #topProgress {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    height: 3px; background: transparent; pointer-events: none;
+  }
+  #topProgressFill {
+    height: 100%; width: 0%; background: var(--blue);
+    transition: width 0.4s ease;
+    box-shadow: 0 0 8px var(--blue);
+  }
+  #scanStatusBanner {
+    position: fixed; top: 3px; left: 50%; transform: translateX(-50%);
+    z-index: 9998; background: var(--surface);
+    border: 0.5px solid var(--border2);
+    border-radius: 0 0 8px 8px;
+    padding: 4px 16px 5px;
+    font-size: 12px; color: var(--text2);
+    display: none; align-items: center; gap: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    white-space: nowrap;
+  }
+  .scan-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--blue); flex-shrink: 0;
+    animation: pulse 1s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
 </style>
 </head>
 <body>
 
+<div id="topProgress"><div id="topProgressFill"></div></div>
+<div id="scanStatusBanner"><div class="scan-dot"></div><span id="scanStatusText">掃描中...</span></div>
 <div class="auth-bar" id="authBar" style="display:none">
   <span class="auth-type-badge" id="authTypeBadge"></span>
   <span class="auth-exp" id="authExp"></span>
@@ -348,19 +379,36 @@ async function pollStatus() {
   const interval = setInterval(async () => {
     try {
       const s = await (await fetch('/api/status')).json();
-      const logs = s.log || [];
-      // log hidden
-
-      // progress hidden
+      const pct = s.progress || 0;
+      const lastLog = (s.log || []).slice(-1)[0] || '';
+      const msg = lastLog.replace(/\[\d+:\d+:\d+\]\s*/, '');
+      setProgress(pct, msg || '掃描中...');
 
       if (!s.running) {
         clearInterval(interval);
-        if (s.error) { showError(s.error); resetBtn(); return; }
+        if (s.error) {
+          setProgress(0);
+          showError(s.error); resetBtn(); return;
+        }
+        setProgress(100, '完成！載入結果...');
         await loadResults();
+        setTimeout(() => setProgress(0), 1200);
         resetBtn();
       }
     } catch(e) { /* retry */ }
-  }, 1000);
+  }, 800);
+}
+
+function setProgress(pct, msg) {
+  document.getElementById('topProgressFill').style.width = pct + '%';
+  const banner = document.getElementById('scanStatusBanner');
+  if (pct > 0 && pct < 100) {
+    banner.style.display = 'flex';
+    document.getElementById('scanStatusText').textContent =
+      (msg || '掃描中...') + '  ' + pct + '%';
+  } else {
+    banner.style.display = 'none';
+  }
 }
 
 async function loadResults() {
