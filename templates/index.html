@@ -289,9 +289,39 @@
       所有登入的人看到的都是同一份最新結果，不需要也無法自己手動觸發掃描。</p>
   </div>
 
+  <!-- ── 篩選條件：管理員可編輯，一般使用者唯讀 ── -->
   <div class="param-section">
-    <div class="param-section-title">📋 目前篩選條件（固定值）</div>
-    <div class="param-readonly" id="paramReadonly">
+    <div class="param-section-title" id="paramSectionTitle">📋 篩選條件</div>
+
+    <!-- 管理員：可編輯的 input（登入後根據type顯示） -->
+    <div id="adminParamBlock" style="display:none">
+      <div class="param-row">
+        <div class="param-label">K值門檻（≤ 此值才進場）</div>
+        <input type="number" id="kThreshold" value="30" min="10" max="80">
+      </div>
+      <div class="param-row">
+        <div class="param-label">YOY 年增率下限 (%)</div>
+        <input type="number" id="yoyMin" value="15" min="0" max="100">
+      </div>
+      <div class="param-row">
+        <div class="param-label">毛利率門檻 (%)</div>
+        <input type="number" id="grossMargin" value="25" min="0" max="80">
+      </div>
+      <div class="param-row">
+        <div class="param-label">營業利益率門檻 (%)</div>
+        <input type="number" id="opMargin" value="15" min="0" max="60">
+      </div>
+      <div class="param-row">
+        <div class="param-label">財務篩選模式</div>
+        <select id="finBlock">
+          <option value="true">擋掉不達標</option>
+          <option value="false">僅標記</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 一般使用者：唯讀顯示 -->
+    <div class="param-readonly" id="paramReadonly" style="display:none">
       <div class="param-readonly-row"><span>K值門檻</span><span id="pK">─</span></div>
       <div class="param-readonly-row"><span>YOY年增率下限</span><span id="pYoy">─</span></div>
       <div class="param-readonly-row"><span>毛利率門檻</span><span id="pGm">─</span></div>
@@ -300,10 +330,10 @@
     </div>
   </div>
 
-  <!-- 管理員：手動觸發按鈕（登入後由JS根據type決定是否顯示） -->
+  <!-- 管理員：套用並掃描 -->
   <div id="adminScanBlock" style="display:none">
     <button class="btn-scan" id="manualScanBtn" onclick="triggerManualScan()">
-      <span id="manualScanIcon">▶</span> 立刻掃描（管理員）
+      <span id="manualScanIcon">▶</span> 套用條件並立刻掃描
     </button>
     <div id="manualScanMsg" style="font-size:11px;margin-top:6px;display:none"></div>
   </div>
@@ -420,11 +450,32 @@ async function pollStatus() {
     document.getElementById('autoIntervalMin').textContent = Math.round((s.scan_interval_sec||900)/60);
 
     if (s.params) {
-      document.getElementById('pK').textContent  = s.params.k_threshold ?? '─';
-      document.getElementById('pYoy').textContent= (s.params.yoy_min ?? '─') + '%';
-      document.getElementById('pGm').textContent = (s.params.gross_margin_min ?? '─') + '%';
-      document.getElementById('pOm').textContent = (s.params.op_margin_min ?? '─') + '%';
-      document.getElementById('pFinBlock').textContent = s.params.fin_block ? '擋掉不達標' : '僅標記';
+      // 唯讀標籤（所有人）
+      const pK = document.getElementById('pK');
+      if (pK) pK.textContent = s.params.k_threshold ?? '─';
+      const pY = document.getElementById('pYoy');
+      if (pY) pY.textContent = (s.params.yoy_min ?? '─') + '%';
+      const pG = document.getElementById('pGm');
+      if (pG) pG.textContent = (s.params.gross_margin_min ?? '─') + '%';
+      const pO = document.getElementById('pOm');
+      if (pO) pO.textContent = (s.params.op_margin_min ?? '─') + '%';
+      const pF = document.getElementById('pFinBlock');
+      if (pF) pF.textContent = s.params.fin_block ? '擋掉不達標' : '僅標記';
+
+      // 可編輯欄位（管理員）：只在第一次拉到值時填入，之後不覆蓋管理員手動修改的值
+      if (!window._paramsFilled) {
+        window._paramsFilled = true;
+        const kt = document.getElementById('kThreshold');
+        if (kt) kt.value = s.params.k_threshold ?? 30;
+        const ym = document.getElementById('yoyMin');
+        if (ym) ym.value = s.params.yoy_min ?? 15;
+        const gm = document.getElementById('grossMargin');
+        if (gm) gm.value = s.params.gross_margin_min ?? 25;
+        const om = document.getElementById('opMargin');
+        if (om) om.value = s.params.op_margin_min ?? 15;
+        const fb = document.getElementById('finBlock');
+        if (fb) fb.value = s.params.fin_block ? 'true' : 'false';
+      }
     }
 
     setProgress(s.running ? (s.progress||0) : 0,
@@ -646,20 +697,33 @@ function showError(msg) {
 }
 
 async function triggerManualScan() {
-  const btn = document.getElementById('manualScanBtn');
+  const btn  = document.getElementById('manualScanBtn');
   const icon = document.getElementById('manualScanIcon');
   const msg  = document.getElementById('manualScanMsg');
   btn.disabled = true;
   icon.textContent = '⏳';
   msg.style.display = 'none';
 
+  const params = {
+    k_threshold:      parseInt(document.getElementById('kThreshold').value)   || 30,
+    yoy_min:          parseFloat(document.getElementById('yoyMin').value)      || 15,
+    gross_margin_min: parseFloat(document.getElementById('grossMargin').value) || 25,
+    op_margin_min:    parseFloat(document.getElementById('opMargin').value)    || 15,
+    fin_block:        document.getElementById('finBlock').value === 'true',
+  };
+
   try {
-    const r = await fetch('/api/scan/manual', { method: 'POST' });
+    const r = await fetch('/api/scan/manual', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(params),
+    });
     const d = await r.json();
     msg.style.display = 'block';
     if (r.ok) {
       msg.className   = 'manual-msg-ok';
       msg.textContent = '✅ ' + d.message;
+      window._paramsFilled = false;  // 掃描完成後允許用新的params刷新顯示
     } else {
       msg.className   = 'manual-msg-err';
       msg.textContent = '❌ ' + (d.error || '觸發失敗');
@@ -671,7 +735,7 @@ async function triggerManualScan() {
   }
 
   setTimeout(() => {
-    btn.disabled = false;
+    btn.disabled     = false;
     icon.textContent = '▶';
   }, 3000);
 }
@@ -702,9 +766,13 @@ async function doLogout() {
 
     // 根據身份決定左側面板
     if (d.type === 'admin') {
-      document.getElementById('adminScanBlock').style.display = 'block';
+      document.getElementById('adminParamBlock').style.display = 'block';
+      document.getElementById('adminScanBlock').style.display  = 'block';
+      document.getElementById('paramSectionTitle').textContent = '📋 篩選條件（可調整）';
     } else {
-      document.getElementById('viewerBlock').style.display = 'block';
+      document.getElementById('paramReadonly').style.display = 'block';
+      document.getElementById('viewerBlock').style.display   = 'block';
+      document.getElementById('paramSectionTitle').textContent = '📋 目前篩選條件';
       const el2 = document.getElementById('autoIntervalMin2');
       if (el2) el2.textContent = document.getElementById('autoIntervalMin').textContent;
     }

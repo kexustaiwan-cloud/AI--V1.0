@@ -347,12 +347,10 @@ SCAN_PARAMS = {
 
 _latest_lock = threading.Lock()
 _latest = {
-    'running': False,            # 是否正在執行中（背景排程跑掃描的當下）
-    'last_scan': None,           # 上次完成掃描的時間（ISO字串）
-    'next_scan_eta': None,       # 預估下次掃描時間（ISO字串）
+    'running': False, 'last_scan': None, 'next_scan_eta': None,
     'results': None, 'etf_results': None, 'regime': None, 'stats': {},
     'log': [], 'error': None, 'progress': 0,
-    'params': SCAN_PARAMS,
+    'params': dict(SCAN_PARAMS),
 }
 
 def _add_log(msg: str, progress: int = None):
@@ -498,15 +496,28 @@ def index():
 @app.route('/api/scan/manual', methods=['POST'])
 @login_required
 def api_scan_manual():
-    """只有管理員可以手動立刻觸發一次掃描（插隊在下次排程前先跑）"""
+    """只有管理員可以手動立刻觸發一次掃描，並同時更新篩選條件"""
     s = _get_session()
     if not s or s['pw_type'] != 'admin':
         return jsonify({'error': '需要管理員權限'}), 403
     with _latest_lock:
         if _latest['running']:
             return jsonify({'error': '掃描已在執行中，請稍候'}), 429
+
+    # 讀取管理員送來的新篩選條件，有送就套用，沒送就維持現有值
+    body = request.get_json(silent=True) or {}
+    if body.get('k_threshold')      is not None: SCAN_PARAMS['k_threshold']      = int(body['k_threshold'])
+    if body.get('yoy_min')          is not None: SCAN_PARAMS['yoy_min']          = float(body['yoy_min'])
+    if body.get('gross_margin_min') is not None: SCAN_PARAMS['gross_margin_min'] = float(body['gross_margin_min'])
+    if body.get('op_margin_min')    is not None: SCAN_PARAMS['op_margin_min']    = float(body['op_margin_min'])
+    if body.get('fin_block')        is not None: SCAN_PARAMS['fin_block']        = bool(body['fin_block'])
+
+    # 同步更新 _latest 裡顯示的 params，讓前端立刻看到最新條件
+    with _latest_lock:
+        _latest['params'] = dict(SCAN_PARAMS)
+
     threading.Thread(target=_run_one_scan, daemon=True).start()
-    return jsonify({'ok': True, 'message': '已觸發手動掃描，請稍候'})
+    return jsonify({'ok': True, 'message': f'已套用新條件並觸發掃描，K≤{SCAN_PARAMS["k_threshold"]} / YOY≥{SCAN_PARAMS["yoy_min"]}%'})
 
 @app.route('/api/status')
 @login_required
