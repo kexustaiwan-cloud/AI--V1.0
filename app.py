@@ -426,7 +426,9 @@ def _run_one_scan(gen=None):
         _latest['log'] = []
         _latest['progress'] = 2
     try:
+        _add_log('初始化核心模組...', 3)
         sc = get_core()
+        _add_log('套用篩選參數...', 5)
         sc.K_THRESHOLD       = SCAN_PARAMS['k_threshold']
         sc.YOY_MIN_PCT       = SCAN_PARAMS['yoy_min']
         sc.GROSS_MARGIN_MIN  = SCAN_PARAMS['gross_margin_min']
@@ -434,8 +436,9 @@ def _run_one_scan(gen=None):
         sc.FIN_BLOCK_ON_FAIL = SCAN_PARAMS['fin_block']
 
         _check_cancel(gen)
-        _add_log('抓取撿股讚基本面資料...', 8)
+        _add_log('連線撿股讚（75683）...', 7)
         fund_df, html = sc.fetch_wespai_fundamental(force=True)
+        _add_log('撿股讚回應已收到，解析中...', 8)
         if fund_df.empty:
             if _is_current_generation(gen):
                 with _latest_lock:
@@ -516,6 +519,29 @@ def _run_one_scan(gen=None):
         _add_log(f'❌ 錯誤：{e}')
         app.logger.error(traceback.format_exc())
 
+def _run_scan_with_watchdog(gen):
+    """在獨立執行緒跑一次掃描，並用 SCAN_TIMEOUT_SEC 看門狗保護；
+    這個函式本身會阻塞，所以呼叫端要自己包一層 daemon thread 才不會卡住呼叫者。
+    """
+    worker = threading.Thread(target=_run_one_scan, args=(gen,), daemon=True)
+    worker.start()
+    worker.join(timeout=SCAN_TIMEOUT_SEC)
+
+    if worker.is_alive():
+        # 逾時：這次掃描被視為卡住，放棄等待，讓舊執行緒變成孤兒（它之後
+        # 就算真的返回，也會因為世代編號過期而被 _run_one_scan 自動忽略）。
+        app.logger.error(f'掃描逾時（超過 {SCAN_TIMEOUT_SEC} 秒未完成），已放棄本輪')
+        if _is_current_generation(gen):
+            with _latest_lock:
+                _latest['running']  = False
+                _latest['progress'] = 0
+                _latest['error']    = f'掃描逾時（超過 {SCAN_TIMEOUT_SEC} 秒），已自動放棄本輪'
+            _add_log(f'⏱️ 掃描逾時（>{SCAN_TIMEOUT_SEC}秒），已放棄本輪')
+
+def _launch_scan(gen):
+    """非阻塞地啟動一次有看門狗保護的掃描（供手動按鈕與排程共用）。"""
+    threading.Thread(target=_run_scan_with_watchdog, args=(gen,), daemon=True).start()
+
 def _scheduler_loop():
     """背景排程：開機先跑一次，之後每 SCAN_INTERVAL_SEC 秒重複執行。
 
@@ -535,22 +561,13 @@ def _scheduler_loop():
     真的結束，主迴圈都會記錄逾時、把狀態重置、並繼續進行下一輪排程；
     同時把世代編號往前推進一格，讓萬一之後才回來的舊執行緒自動失效，
     不會再污染新一輪的結果（見 _run_one_scan 內的世代檢查）。
+
+    ★ 補充修正：這個看門狗現在也套用到「手動按鈕」觸發的掃描（見
+    api_scan_manual 內改呼叫 _launch_scan），不再只保護自動排程。
     """
     while True:
         gen = _new_generation()
-        worker = threading.Thread(target=_run_one_scan, args=(gen,), daemon=True)
-        worker.start()
-        worker.join(timeout=SCAN_TIMEOUT_SEC)
-
-        if worker.is_alive():
-            # 逾時：這次掃描被視為卡住，放棄等待，讓舊執行緒變成孤兒（它之後
-            # 就算真的返回，也會因為世代編號過期而被 _run_one_scan 自動忽略）。
-            app.logger.error(f'掃描逾時（超過 {SCAN_TIMEOUT_SEC} 秒未完成），已放棄本輪並繼續排程')
-            with _latest_lock:
-                _latest['running']  = False
-                _latest['progress'] = 0
-                _latest['error']    = f'掃描逾時（超過 {SCAN_TIMEOUT_SEC} 秒），已自動略過本輪，下一輪會重試'
-            _add_log(f'⏱️ 掃描逾時（>{SCAN_TIMEOUT_SEC}秒），已略過本輪')
+        _run_scan_with_watchdog(gen)   # 這裡故意用「阻塞」版本：排程本來就要照順序跑
 
         with _latest_lock:
             eta = (_now_tw() + timedelta(seconds=SCAN_INTERVAL_SEC)).isoformat()
@@ -599,7 +616,7 @@ def api_scan_manual():
         _add_log('⏹ 管理員中斷目前掃描，套用新條件後重新啟動...')
 
     gen = _new_generation()
-    threading.Thread(target=_run_one_scan, args=(gen,), daemon=True).start()
+    _launch_scan(gen)
     action = '已中斷舊掃描，' if is_running else ''
     return jsonify({'ok': True,
                     'message': f'{action}套用新條件並重新掃描 — K≤{SCAN_PARAMS["k_threshold"]} / YOY≥{SCAN_PARAMS["yoy_min"]}%'})
