@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: taiwan-stock-scanner
+    env: python
+    buildCommand: pip install -r requirements.txt
+    # 重要：排隊/掃描狀態目前存在記憶體（同一個process），多個worker process之間
+    # 不會共用資料，所以這裡固定用 1 個 worker（搭配 --threads 處理多人連線），
+    # 不要改成 --workers 2 以上，否則使用者可能連到不同process、狀態會對不起來。
+    startCommand: gunicorn app:app --workers 1 --threads 8 --worker-class gthread --timeout 300 --bind 0.0.0.0:$PORT
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: MAX_CONCURRENT_SCANS
+        value: "1"
+      - key: MAX_QUEUE_SIZE
+        value: "30"
+      - key: AVG_SCAN_SECONDS
+        value: "90"
+      - key: SCAN_TIMEOUT_SEC
+        value: "240"

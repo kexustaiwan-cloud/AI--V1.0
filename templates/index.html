@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>台股掃描系統 v4.9</title>
+<style>
+  :root {
+    --bg: #f5f5f3;
+    --surface: #ffffff;
+    --surface2: #f0efeb;
+    --border: rgba(0,0,0,0.1);
+    --border2: rgba(0,0,0,0.2);
+    --text: #1a1a18;
+    --text2: #5f5e5a;
+    --text3: #888780;
+    --green: #1D9E75; --green-bg: #E1F5EE; --green-text: #0F6E56;
+    --blue: #378ADD;  --blue-bg: #E6F1FB;  --blue-text: #185FA5;
+    --amber: #BA7517; --amber-bg: #FAEEDA; --amber-text: #854F0B;
+    --red: #E24B4A;   --red-bg: #FCEBEB;   --red-text: #A32D2D;
+    --gray-bg: #F1EFE8; --gray-text: #5F5E5A;
+    --coral: #D85A30; --coral-bg: #FAECE7; --coral-text: #993C1D;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a18; --surface: #242422; --surface2: #2e2e2c;
+      --border: rgba(255,255,255,0.1); --border2: rgba(255,255,255,0.2);
+      --text: #e8e7e3; --text2: #a8a79f; --text3: #6e6d68;
+      --green-bg: #085041; --green-text: #5DCAA5;
+      --blue-bg: #0C447C;  --blue-text: #85B7EB;
+      --amber-bg: #633806; --amber-text: #FAC775;
+      --red-bg: #791F1F;   --red-text: #F09595;
+      --gray-bg: #2C2C2A;  --gray-text: #B4B2A9;
+      --coral-bg: #712B13; --coral-text: #F0997B;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Noto Sans TC', sans-serif;
+         background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.6; }
+  a { color: var(--blue); }
+
+  /* Layout */
+  html, body { height: 100%; }
+  .layout { display: grid; grid-template-columns: 300px 1fr; height: 100vh; overflow: hidden; }
+  .sidebar { background: var(--surface); border-right: 0.5px solid var(--border);
+             padding: 1.5rem 1.25rem 2rem; height: 100vh; overflow-y: auto; }
+  .main { padding: 3.2rem 1.75rem 2.5rem; height: 100vh; overflow-y: auto; }
+
+  /* Sidebar */
+  .logo { display: flex; align-items: center; gap: 10px; margin-bottom: 1.5rem; padding-bottom: 1rem;
+          border-bottom: 0.5px solid var(--border); }
+  .logo-icon { width: 36px; height: 36px; border-radius: 8px; background: var(--blue-bg);
+               display: flex; align-items: center; justify-content: center; font-size: 18px; }
+  .logo-text { font-weight: 600; font-size: 14px; }
+  .logo-sub  { font-size: 11px; color: var(--text3); }
+
+  .param-section { margin-bottom: 1.25rem; }
+  .param-section-title { font-size: 11px; font-weight: 600; color: var(--text3);
+                         text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+  .param-row { margin-bottom: 8px; }
+  .param-label { font-size: 12px; color: var(--text2); margin-bottom: 3px; }
+  .param-row input, .param-row select {
+    width: 100%; padding: 6px 10px; border-radius: 6px; font-size: 13px;
+    border: 0.5px solid var(--border2); background: var(--surface2); color: var(--text);
+    outline: none; transition: border-color 0.15s;
+  }
+  .param-row input:focus, .param-row select:focus { border-color: var(--blue); }
+
+  .btn-scan { width: 100%; padding: 10px; border-radius: 8px; font-size: 14px; font-weight: 500;
+              background: var(--blue); color: #fff; border: none; cursor: pointer;
+              display: flex; align-items: center; justify-content: center; gap: 8px;
+              transition: opacity 0.15s; margin-top: 1rem; }
+  .btn-scan:disabled { opacity: 0.55; cursor: not-allowed; }
+  .btn-scan:hover:not(:disabled) { opacity: 0.9; }
+
+  /* Auto-scan status */
+  .auto-status-box { background: var(--surface2); border-radius: 8px; padding: 10px 12px;
+                      border: 0.5px solid var(--border); }
+  .auto-status-row { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; }
+  .auto-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text3); flex-shrink: 0; }
+  .auto-status-dot.live { background: var(--green); animation: pulse 1.2s ease-in-out infinite; }
+  .auto-status-dot.busy { background: var(--blue); animation: pulse 1s ease-in-out infinite; }
+  .auto-status-dot.err  { background: var(--red); }
+  .auto-status-sub { font-size: 11px; color: var(--text3); margin-top: 5px; }
+  .auto-hint { font-size: 11px; color: var(--text3); margin-top: 8px; line-height: 1.5; }
+  .viewer-badge { display: inline-block; background: var(--surface2); border: 0.5px solid var(--border2);
+                   color: var(--text2); font-size: 12px; font-weight: 600; padding: 5px 12px;
+                   border-radius: 99px; margin-bottom: 6px; }
+  .manual-msg-ok  { color: var(--green); }
+  .manual-msg-err { color: var(--red); }
+
+  .param-readonly { background: var(--surface2); border-radius: 8px; padding: 4px 12px;
+                     border: 0.5px solid var(--border); }
+  .param-readonly-row { display: flex; justify-content: space-between; align-items: center;
+                         font-size: 12px; padding: 7px 0; border-bottom: 0.5px solid var(--border); }
+  .param-readonly-row:last-child { border-bottom: none; }
+  .param-readonly-row span:first-child { color: var(--text2); }
+  .param-readonly-row span:last-child  { font-weight: 600; }
+
+  /* Main area */
+  .page-header { display: flex; align-items: center; gap: 12px; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  .page-title { font-size: 20px; font-weight: 600; }
+  .regime-pill { padding: 4px 12px; border-radius: 99px; font-size: 12px; font-weight: 500;
+                 background: var(--surface2); color: var(--text2); border: 0.5px solid var(--border); }
+  .regime-pill.bull { background: var(--green-bg); color: var(--green-text); border-color: transparent; }
+  .regime-pill.bear { background: var(--red-bg);   color: var(--red-text);   border-color: transparent; }
+  .last-scan { font-size: 12px; color: var(--text3); margin-left: auto; }
+
+  /* Summary cards */
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+                  gap: 10px; margin-bottom: 1.5rem; }
+  .sum-card { background: var(--surface); border-radius: 10px; border: 0.5px solid var(--border);
+              padding: 12px 16px; }
+  .sum-num   { font-size: 24px; font-weight: 600; }
+  .sum-label { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 1.25rem; flex-wrap: wrap; }
+  .tab  { padding: 6px 14px; border-radius: 6px; font-size: 13px; cursor: pointer;
+          border: 0.5px solid var(--border); color: var(--text2); background: var(--surface);
+          transition: all 0.15s; white-space: nowrap; }
+  .tab.active { background: var(--blue-bg); color: var(--blue-text); border-color: transparent; }
+  .tab:hover:not(.active) { border-color: var(--border2); }
+  .tab-count { display: inline-block; background: var(--surface2); color: var(--text3);
+               border-radius: 99px; padding: 0 6px; font-size: 10px; margin-left: 4px; }
+  .tab.active .tab-count { background: rgba(0,0,0,0.12); color: inherit; }
+
+  /* Stock cards */
+  .stocks-list { display: flex; flex-direction: column; gap: 8px; }
+  .stock-card { background: var(--surface); border: 0.5px solid var(--border);
+                border-radius: 10px; padding: 12px 14px; border-left: 3px solid transparent; }
+  .stock-card.A    { border-left-color: var(--green); }
+  .stock-card.B    { border-left-color: var(--blue); }
+  .stock-card.C    { border-left-color: var(--amber); }
+  .stock-card.D    { border-left-color: var(--gray-text); }
+  .stock-card.exit { border-left-color: var(--red); }
+  .stock-card.watch{ border-left-color: transparent; }
+  .stock-card.ETF-S{ border-left-color: var(--green); }
+  .stock-card.ETF-B{ border-left-color: var(--blue); }
+  .stock-card.fin  { border-left-color: var(--coral); }
+  .stock-card.mom  { border-left-color: var(--amber); }
+
+  .stock-top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .stock-code { font-size: 15px; font-weight: 600; }
+  .stock-name { font-size: 13px; color: var(--text2); }
+  .stock-ind  { font-size: 11px; color: var(--text3); padding: 1px 7px; border-radius: 99px;
+                background: var(--surface2); border: 0.5px solid var(--border); }
+  .stock-ind.prio { background: var(--amber-bg); color: var(--amber-text); border-color: transparent; }
+
+  .grade-badge { margin-left: auto; padding: 3px 10px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+  .badge-A    { background: var(--green-bg); color: var(--green-text); }
+  .badge-B    { background: var(--blue-bg);  color: var(--blue-text); }
+  .badge-C    { background: var(--amber-bg); color: var(--amber-text); }
+  .badge-D    { background: var(--gray-bg);  color: var(--gray-text); }
+  .badge-exit { background: var(--red-bg);   color: var(--red-text); }
+  .badge-watch{ background: var(--surface2); color: var(--text3); }
+  .badge-ETF-S{ background: var(--green-bg); color: var(--green-text); }
+  .badge-ETF-B{ background: var(--blue-bg);  color: var(--blue-text); }
+  .badge-fin  { background: var(--coral-bg); color: var(--coral-text); }
+  .badge-mom  { background: var(--amber-bg); color: var(--amber-text); }
+
+  .metrics { display: flex; flex-wrap: wrap; gap: 5px; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 99px;
+          background: var(--surface2); color: var(--text2);
+          border: 0.5px solid var(--border); white-space: nowrap; }
+  .pill.ok  { background: var(--green-bg); color: var(--green-text); border-color: transparent; }
+  .pill.warn{ background: var(--amber-bg); color: var(--amber-text); border-color: transparent; }
+  .pill.bad { background: var(--red-bg);   color: var(--red-text);   border-color: transparent; }
+  .pill.info{ background: var(--blue-bg);  color: var(--blue-text);  border-color: transparent; }
+
+  .stock-note { font-size: 11px; color: var(--text3); margin-top: 6px; }
+
+  /* Empty / error states */
+  .empty { text-align: center; padding: 3rem 1rem; color: var(--text3); }
+  .empty-icon { font-size: 40px; margin-bottom: 12px; }
+  .empty h3 { font-size: 16px; font-weight: 500; color: var(--text2); margin-bottom: 6px; }
+  .error-box { background: var(--red-bg); color: var(--red-text); border-radius: 8px;
+               padding: 12px 16px; font-size: 13px; margin-bottom: 1rem; }
+
+  /* Section header */
+  .section-hdr { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .section-label { font-size: 13px; font-weight: 600; }
+  .section-desc  { font-size: 11px; color: var(--text3); }
+  .section-count { margin-left: auto; font-size: 12px; color: var(--text3); }
+
+  /* Results panel wrapper */
+  .results-panel { background: var(--surface); border: 0.5px solid var(--border);
+                    border-radius: 12px; padding: 1.25rem 1.5rem 1.5rem; }
+  .stock-card { transition: box-shadow 0.15s, transform 0.1s; }
+  .stock-card:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
+
+  @media (max-width: 768px) {
+    .layout { grid-template-columns: 1fr; height: auto; overflow: visible; }
+    .sidebar { position: static; height: auto; max-height: 45vh; border-right: none;
+               border-bottom: 0.5px solid var(--border); }
+    .main { height: auto; padding: 1rem; }
+    body { overflow-y: auto; }
+  }
+
+  /* ── Auth info bar ── */
+  .auth-bar {
+    position: fixed; top: 0; right: 0; z-index: 999;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 16px;
+    background: var(--surface);
+    border-bottom: 0.5px solid var(--border);
+    border-left: 0.5px solid var(--border);
+    border-radius: 0 0 0 10px;
+    font-size: 12px;
+  }
+  .auth-type-badge {
+    padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600;
+  }
+  .auth-type-badge.trial { background: var(--amber-bg); color: var(--amber-text); }
+  .auth-type-badge.full  { background: var(--green-bg); color: var(--green-text); }
+  .auth-exp { color: var(--text3); }
+  .btn-logout {
+    padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 500;
+    background: transparent; color: var(--text3);
+    border: 0.5px solid var(--border2); cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-logout:hover { background: var(--red-bg); color: var(--red-text); border-color: transparent; }
+
+
+  /* ── Top progress bar ── */
+  #topProgress {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    height: 3px; background: transparent; pointer-events: none;
+  }
+  #topProgressFill {
+    height: 100%; width: 0%; background: var(--blue);
+    transition: width 0.4s ease;
+    box-shadow: 0 0 8px var(--blue);
+  }
+  #scanStatusBanner {
+    position: fixed; top: 3px; left: 50%; transform: translateX(-50%);
+    z-index: 9998; background: var(--surface);
+    border: 0.5px solid var(--border2);
+    border-radius: 0 0 8px 8px;
+    padding: 4px 16px 5px;
+    font-size: 12px; color: var(--text2);
+    display: none; align-items: center; gap: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    white-space: nowrap;
+  }
+  .scan-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--blue); flex-shrink: 0;
+    animation: pulse 1s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+</style>
+</head>
+<body>
+
+<div id="topProgress"><div id="topProgressFill"></div></div>
+<div id="scanStatusBanner"><div class="scan-dot"></div><span id="scanStatusText">掃描中...</span></div>
+<div class="auth-bar" id="authBar" style="display:none">
+  <span class="auth-type-badge" id="authTypeBadge"></span>
+  <span class="auth-exp" id="authExp"></span>
+  <button class="btn-logout" onclick="doLogout()">登出</button>
+</div>
+
+<div class="layout">
+
+<!-- ── Sidebar ── -->
+<aside class="sidebar">
+  <div class="logo">
+    <div class="logo-icon">📊</div>
+    <div>
+      <div class="logo-text">台股掃描系統</div>
+      <div class="logo-sub">v6.0 自動排程版</div>
+    </div>
+  </div>
+
+  <div class="param-section">
+    <div class="param-section-title">⏱ 自動掃描狀態</div>
+    <div class="auto-status-box">
+      <div class="auto-status-row">
+        <span class="auto-status-dot" id="autoDot"></span>
+        <span id="autoStatusText">載入中...</span>
+      </div>
+      <div class="auto-status-sub" id="autoLastScan">上次掃描：─</div>
+      <div class="auto-status-sub" id="autoNextScan">下次掃描：─</div>
+    </div>
+    <p class="auto-hint">系統每 <b id="autoIntervalMin">15</b> 分鐘自動重新掃描一次，
+      所有登入的人看到的都是同一份最新結果，不需要也無法自己手動觸發掃描。</p>
+  </div>
+
+  <!-- ── 篩選條件：管理員可編輯，一般使用者唯讀 ── -->
+  <div class="param-section">
+    <div class="param-section-title" id="paramSectionTitle">📋 篩選條件</div>
+
+    <!-- 管理員：可編輯的 input（登入後根據type顯示） -->
+    <div id="adminParamBlock" style="display:none">
+      <div class="param-row">
+        <div class="param-label">K值門檻（≤ 此值才進場）</div>
+        <input type="number" id="kThreshold" value="30" min="10" max="80">
+      </div>
+      <div class="param-row">
+        <div class="param-label">YOY 年增率下限 (%)</div>
+        <input type="number" id="yoyMin" value="15" min="0" max="100">
+      </div>
+      <div class="param-row">
+        <div class="param-label">毛利率門檻 (%)</div>
+        <input type="number" id="grossMargin" value="25" min="0" max="80">
+      </div>
+      <div class="param-row">
+        <div class="param-label">營業利益率門檻 (%)</div>
+        <input type="number" id="opMargin" value="15" min="0" max="60">
+      </div>
+      <div class="param-row">
+        <div class="param-label">財務篩選模式</div>
+        <select id="finBlock">
+          <option value="true">擋掉不達標</option>
+          <option value="false">僅標記</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 一般使用者：唯讀顯示 -->
+    <div class="param-readonly" id="paramReadonly" style="display:none">
+      <div class="param-readonly-row"><span>K值門檻</span><span id="pK">─</span></div>
+      <div class="param-readonly-row"><span>YOY年增率下限</span><span id="pYoy">─</span></div>
+      <div class="param-readonly-row"><span>毛利率門檻</span><span id="pGm">─</span></div>
+      <div class="param-readonly-row"><span>營業利益率門檻</span><span id="pOm">─</span></div>
+      <div class="param-readonly-row"><span>財務篩選模式</span><span id="pFinBlock">─</span></div>
+    </div>
+  </div>
+
+  <!-- 管理員：套用並掃描 -->
+  <div id="adminScanBlock" style="display:none">
+    <button class="btn-scan" id="manualScanBtn" onclick="triggerManualScan()">
+      <span id="manualScanIcon">▶</span> 套用條件並立刻掃描
+    </button>
+    <div id="manualScanMsg" style="font-size:11px;margin-top:6px;display:none"></div>
+  </div>
+
+  <!-- 一般使用者：觀看模式說明 -->
+  <div id="viewerBlock" style="display:none">
+    <div class="viewer-badge">👁 觀看模式</div>
+    <p class="auto-hint">您的帳號為觀看權限，系統每 <b id="autoIntervalMin2">15</b> 分鐘自動更新結果，頁面會自動同步，無需任何操作。</p>
+  </div>
+
+  <button class="btn-scan" id="refreshBtn" onclick="loadResults()" style="background:var(--surface2);color:var(--text2);border:0.5px solid var(--border2);margin-top:8px">
+    🔄 重新整理顯示
+  </button>
+</aside>
+
+<!-- ── Main ── -->
+<main class="main" id="mainPane">
+  <div class="page-header">
+    <div class="page-title">掃描結果</div>
+    <span class="regime-pill" id="regimePill">尚未掃描</span>
+    <span class="last-scan" id="lastScan"></span>
+  </div>
+
+
+  <div id="errorBox" style="display:none"></div>
+
+  <div id="summaryGrid" style="display:none" class="summary-grid">
+    <div class="sum-card">
+      <div class="sum-num" id="sA" style="color:var(--green)">─</div>
+      <div class="sum-label">⭐⭐⭐ A類進場</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-num" id="sBCD" style="color:var(--blue)">─</div>
+      <div class="sum-label">⭐ B/C/D 類</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-num" id="sEtf" style="color:var(--green)">─</div>
+      <div class="sum-label">📡 ETF 訊號</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-num" id="sExit" style="color:var(--red)">─</div>
+      <div class="sum-label">🔴 出場訊號</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-num" id="sTotal">─</div>
+      <div class="sum-label">總掃描個股</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-num" id="sYoy" style="color:var(--blue)">─</div>
+      <div class="sum-label">YOY達標</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-num" id="sFinPass" style="color:var(--green)">─</div>
+      <div class="sum-label">財務達標</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-num" id="sFinFail" style="color:var(--red)">─</div>
+      <div class="sum-label">財務不達標</div>
+    </div>
+  </div>
+
+  <div class="results-panel">
+    <div class="tabs" id="tabsRow" style="display:none"></div>
+    <div id="stocksArea">
+      <div class="empty">
+        <div class="empty-icon">📈</div>
+        <h3>準備掃描</h3>
+        <p>設定參數後點擊「開始掃描」<br>系統將從撿股讚、yfinance 抓取即時資料</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+</div>
+
+<script>
+const PRIO_IND = ['AI','伺服器','散熱','液冷','機殼','IC設計','半導體','晶圓','封裝','測試','設備','連接器','PCB','電路板','被動元件','網通','交換器','資安','感測器','影像','電動車','儲能','電池'];
+let allResults = [], etfResults = [], currentTab = 'all';
+let lastSeenScanTime = null;
+
+function fmtDT(iso) {
+  if (!iso) return '─';
+  return iso.replace('T',' ').slice(0,19);
+}
+function fmtCountdown(iso) {
+  if (!iso) return '─';
+  const diff = Math.max(0, Math.floor((new Date(iso) - new Date()) / 1000));
+  const m = Math.floor(diff/60), s = diff%60;
+  return `${m}分${String(s).padStart(2,'0')}秒後`;
+}
+
+async function pollStatus() {
+  try {
+    const s = await (await fetch('/api/status')).json();
+
+    const dot  = document.getElementById('autoDot');
+    const text = document.getElementById('autoStatusText');
+    if (s.error) {
+      dot.className = 'auto-status-dot err';
+      text.textContent = '上次掃描發生錯誤，等待下次重試';
+    } else if (s.running) {
+      dot.className = 'auto-status-dot busy';
+      const lastLog = (s.log || []).slice(-1)[0] || '';
+      const msg = lastLog.replace(/\[\d+:\d+:\d+\]\s*/, '');
+      text.textContent = `掃描中... ${msg ? '(' + msg + ')' : ''} ${s.progress || 0}%`;
+      // 按鈕改成「中斷並重新掃描」
+      const btn2 = document.getElementById('manualScanBtn');
+      if (btn2 && !btn2.disabled) {
+        document.getElementById('manualScanIcon').textContent = '⏹';
+        btn2.style.background = 'var(--red)';
+        btn2.childNodes[btn2.childNodes.length - 1].textContent = ' 中斷並重新套用條件';
+      }
+    } else {
+      dot.className = 'auto-status-dot live';
+      text.textContent = '系統運作中（自動排程）';
+      const btn2 = document.getElementById('manualScanBtn');
+      if (btn2 && !btn2.disabled) {
+        document.getElementById('manualScanIcon').textContent = '▶';
+        btn2.style.background = 'var(--blue)';
+        btn2.childNodes[btn2.childNodes.length - 1].textContent = ' 套用條件並立刻掃描';
+      }
+    }
+
+    document.getElementById('autoLastScan').textContent = '上次掃描：' + fmtDT(s.last_scan);
+    document.getElementById('autoNextScan').textContent =
+      s.running ? '下次掃描：掃描完成後立即排程' : '下次掃描：約 ' + fmtCountdown(s.next_scan_eta);
+    document.getElementById('autoIntervalMin').textContent = Math.round((s.scan_interval_sec||900)/60);
+
+    if (s.params) {
+      // 唯讀標籤（所有人）
+      const pK = document.getElementById('pK');
+      if (pK) pK.textContent = s.params.k_threshold ?? '─';
+      const pY = document.getElementById('pYoy');
+      if (pY) pY.textContent = (s.params.yoy_min ?? '─') + '%';
+      const pG = document.getElementById('pGm');
+      if (pG) pG.textContent = (s.params.gross_margin_min ?? '─') + '%';
+      const pO = document.getElementById('pOm');
+      if (pO) pO.textContent = (s.params.op_margin_min ?? '─') + '%';
+      const pF = document.getElementById('pFinBlock');
+      if (pF) pF.textContent = s.params.fin_block ? '擋掉不達標' : '僅標記';
+
+      // 可編輯欄位（管理員）：只在第一次拉到值時填入，之後不覆蓋管理員手動修改的值
+      if (!window._paramsFilled) {
+        window._paramsFilled = true;
+        const kt = document.getElementById('kThreshold');
+        if (kt) kt.value = s.params.k_threshold ?? 30;
+        const ym = document.getElementById('yoyMin');
+        if (ym) ym.value = s.params.yoy_min ?? 15;
+        const gm = document.getElementById('grossMargin');
+        if (gm) gm.value = s.params.gross_margin_min ?? 25;
+        const om = document.getElementById('opMargin');
+        if (om) om.value = s.params.op_margin_min ?? 15;
+        const fb = document.getElementById('finBlock');
+        if (fb) fb.value = s.params.fin_block ? 'true' : 'false';
+      }
+    }
+
+    setProgress(s.running ? (s.progress||0) : 0,
+                s.running ? '系統自動掃描中...' : '');
+
+    // 偵測到新的一次掃描完成 → 自動重新載入結果，所有人都會同步看到最新資料
+    if (s.last_scan && s.last_scan !== lastSeenScanTime && !s.running) {
+      lastSeenScanTime = s.last_scan;
+      await loadResults();
+    } else if (lastSeenScanTime === null && s.last_scan) {
+      lastSeenScanTime = s.last_scan;
+      await loadResults();
+    }
+  } catch(e) { /* 忽略，下次再試 */ }
+}
+
+function setProgress(pct, msg) {
+  document.getElementById('topProgressFill').style.width = pct + '%';
+  const banner = document.getElementById('scanStatusBanner');
+  if (pct > 0 && pct < 100) {
+    banner.style.display = 'flex';
+    document.getElementById('scanStatusText').textContent = (msg || '掃描中...') + '  ' + pct + '%';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+let currentScanParams = null;
+
+async function loadResults() {
+  const r = await fetch('/api/results');
+  if (!r.ok) { return; }  // 第一次掃描完成前屬正常狀態，不顯示錯誤
+  const data = await r.json();
+
+  allResults = data.results || [];
+  etfResults = data.etf_results || [];
+  currentScanParams = data.params || currentScanParams;
+  const regime = data.regime || {};
+  const stats  = data.stats || {};
+
+  // Regime
+  const pill = document.getElementById('regimePill');
+  const sc = regime.score || 0;
+  const nm = regime.name || '中性';
+  if (regime.regime_type === 'bull' || sc >= 60) { pill.className = 'regime-pill bull'; pill.textContent = `多頭 ${nm} ${sc}分`; }
+  else if (regime.regime_type === 'bear' || sc < 40) { pill.className = 'regime-pill bear'; pill.textContent = `空頭 ${nm} ${sc}分`; }
+  else { pill.className = 'regime-pill'; pill.textContent = `中性 ${nm} ${sc}分`; }
+
+  if (data.last_scan) {
+    document.getElementById('lastScan').textContent = '上次掃描：' + data.last_scan.replace('T',' ').slice(0,19);
+  }
+
+  // Stats
+  document.getElementById('summaryGrid').style.display = '';
+  const grpA = allResults.filter(r => r.entry_type === 'A');
+  const grpBCD = allResults.filter(r => ['B','C','D'].includes(r.entry_type));
+  const grpExit = allResults.filter(r => r.exit_signal && !r.entry_type);
+  const etfSig = etfResults.filter(r => r.etf_signal === 'strong_buy' || r.etf_signal === 'buy');
+  document.getElementById('sA').textContent      = grpA.length;
+  document.getElementById('sBCD').textContent    = grpBCD.length;
+  document.getElementById('sEtf').textContent    = etfSig.length;
+  document.getElementById('sExit').textContent   = grpExit.length;
+  document.getElementById('sTotal').textContent  = allResults.length;
+  document.getElementById('sYoy').textContent    = stats.yoy_pass || '─';
+  document.getElementById('sFinPass').textContent= stats.fin_pass || '─';
+  document.getElementById('sFinFail').textContent= stats.fin_fail || '─';
+
+  renderTabs();
+  renderTab(currentTab);
+
+  if (!hasScrolledOnce) {
+    hasScrolledOnce = true;
+    const mainPane = document.getElementById('mainPane');
+    if (mainPane) mainPane.scrollTop = 0;
+    window.scrollTo(0, 0);
+  }
+}
+
+function renderTabs() {
+  const grps = getGroups();
+  const tabs = [
+    { id: 'all',   label: '全部', count: allResults.length + etfResults.length },
+    { id: 'A',     label: '⭐⭐⭐ A類', count: grps.A.length },
+    { id: 'BCD',   label: '⭐ B/C/D', count: grps.B.length + grps.C.length + grps.D.length },
+    { id: 'etf',   label: '📡 ETF', count: etfResults.filter(r => r.etf_signal !== 'watch').length },
+    { id: 'exit',  label: '🔴 出場', count: grps.exit.length },
+    { id: 'watch', label: '觀察中', count: grps.watch.length },
+    { id: 'fin',   label: '財務擋', count: grps.fin.length },
+  ].filter(t => t.count > 0 || t.id === 'all');
+
+  document.getElementById('tabsRow').style.display = '';
+  document.getElementById('tabsRow').innerHTML = tabs.map(t =>
+    `<div class="tab ${currentTab === t.id ? 'active' : ''}" onclick="switchTab('${t.id}')">${t.label}<span class="tab-count">${t.count}</span></div>`
+  ).join('');
+}
+
+function switchTab(id) {
+  currentTab = id;
+  renderTabs();
+  renderTab(id);
+}
+
+function getGroups() {
+  return {
+    A:     allResults.filter(r => r.entry_type === 'A'),
+    B:     allResults.filter(r => r.entry_type === 'B'),
+    C:     allResults.filter(r => r.entry_type === 'C'),
+    D:     allResults.filter(r => r.entry_type === 'D'),
+    exit:  allResults.filter(r => r.exit_signal && !r.entry_type && !r.entry_blocked),
+    fin:   allResults.filter(r => r.fin_blocked),
+    mom:   allResults.filter(r => r.mom_blocked),
+    watch: allResults.filter(r => !r.entry_type && !r.exit_signal && !r.entry_blocked && !r.error),
+  };
+}
+
+function renderTab(id) {
+  const g = getGroups();
+  const area = document.getElementById('stocksArea');
+  let sections = [];
+
+  if (id === 'all' || id === 'A')   sections.push({ grp: g.A,    grade: 'A',    label: '⭐⭐⭐ A類進場', desc: '42↑ 20↑ 60↑ + >60MA + DIF + K≤門檻' });
+  if (id === 'all' || id === 'BCD') sections.push({ grp: g.B,    grade: 'B',    label: '⭐⭐ B類進場', desc: '42↑ + 突破20MA' });
+  if (id === 'all' || id === 'BCD') sections.push({ grp: g.C,    grade: 'C',    label: '⭐ C類進場',  desc: '>42MA <20MA + K≤門檻' });
+  if (id === 'all' || id === 'BCD') sections.push({ grp: g.D,    grade: 'D',    label: '⭐ D類進場',  desc: '>42MA + DIF + K≤門檻' });
+  if (id === 'all' || id === 'etf') {
+    const etfS = etfResults.filter(r => r.etf_signal === 'strong_buy');
+    const etfB = etfResults.filter(r => r.etf_signal === 'buy');
+    if (etfS.length) sections.push({ grp: etfS, grade: 'ETF-S', label: '🟢 ETF強烈買進', desc: `日K≤${etfS[0]?.k_day||25}` });
+    if (etfB.length) sections.push({ grp: etfB, grade: 'ETF-B', label: '🟡 ETF買進', desc: '60分K≤門檻' });
+  }
+  if (id === 'all' || id === 'exit') sections.push({ grp: g.exit, grade: 'exit', label: '🔴 出場訊號', desc: '符合出場條件' });
+  if (id === 'all' || id === 'fin')  sections.push({ grp: g.fin,  grade: 'fin',  label: '🚫 財務擋掉', desc: '財務品質不達標' });
+  if (id === 'all' || id === 'watch') sections.push({ grp: g.watch, grade: 'watch', label: '─ 觀察中', desc: '技術條件尚未滿足' });
+
+  const html = sections.filter(s => s.grp.length > 0).map(sec => `
+    <div style="margin-bottom:1.5rem">
+      <div class="section-hdr">
+        <span class="section-label">${escHtml(sec.label)}</span>
+        <span class="section-desc">— ${escHtml(sec.desc)}</span>
+        <span class="section-count">${sec.grp.length} 檔</span>
+      </div>
+      <div class="stocks-list">${sec.grp.map(r => renderCard(r, sec.grade)).join('')}</div>
+    </div>
+  `).join('');
+
+  area.innerHTML = html || `<div class="empty"><div class="empty-icon">✅</div><h3>此分類無資料</h3></div>`;
+}
+
+const PRIO_SET = new Set(PRIO_IND);
+function isPrio(ind) { return ind && PRIO_IND.some(p => ind.includes(p)); }
+
+function fmt(v, d=1) { return v != null ? Number(v).toFixed(d) : 'N/A'; }
+function fmtPct(v) { return v != null ? (v >= 0 ? '+' : '') + fmt(v, 1) + '%' : 'N/A'; }
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderCard(r, grade) {
+  const ind = r.industry || r.name || '';
+  const prio = isPrio(ind);
+  const prioStar = prio ? '🏆 ' : '';
+  const fq = r.fin_quality || {};
+  const gm = fq.gross_margin_q1; const om = fq.op_margin_q1;
+  const ic = fq.interest_coverage;
+  const finPass = fq.fin_pass;
+  const finIcon = finPass === true ? '✅' : finPass === false ? '❌' : '─';
+  const finCls  = finPass === true ? 'ok' : finPass === false ? 'bad' : '';
+
+  const k = r.k60; const kNum = Number(k);
+  const kThr = (currentScanParams && currentScanParams.k_threshold) || 30;
+  const kCls = kNum <= kThr ? 'ok' : kNum <= kThr + 15 ? 'warn' : '';
+
+  const momGrade = r.mom_grade || 'NA';
+  const momCls = momGrade === 'A' ? 'ok' : momGrade === 'W' ? 'bad' : momGrade === 'C' ? 'warn' : '';
+  const momIcon = {A:'✅', B:'~', C:'⚠', W:'🔴', NA:'?'}[momGrade] || '?';
+
+  const vol = r.vol_surge || {};
+  const volIcon = vol.level === 'best' ? '🚀' : vol.level === 'watch' ? '⚡' : vol.level === 'consec' ? '📶' : '';
+
+  const failText = (fq.fin_fail_reasons && fq.fin_fail_reasons.length ? fq.fin_fail_reasons.join('、') : '') || r.entry_block_reason || '';
+  const failReasons = failText ? `<div class="stock-note">❌ ${escHtml(failText)}</div>` : '';
+
+  const badgeLabel = grade === 'ETF-S' ? 'ETF🟢' : grade === 'ETF-B' ? 'ETF🟡' :
+                     grade === 'exit' ? '出場' : grade === 'watch' ? '觀察' :
+                     grade === 'fin' ? '財務擋' : grade === 'mom' ? 'MoM擋' : grade + '類';
+
+  const yoyVal = r.yoy_m1 != null ? r.yoy_m1 : (r.fin_quality?.yoy_m1);
+
+  return `<div class="stock-card ${escHtml(grade)}">
+    <div class="stock-top">
+      <span class="stock-code">${escHtml(r.tid)}</span>
+      <span class="stock-name">${escHtml(r.name)}</span>
+      <span class="stock-ind ${prio ? 'prio' : ''}">${prioStar}${escHtml(ind)}</span>
+      <span class="grade-badge badge-${escHtml(grade)}">${badgeLabel}</span>
+    </div>
+    <div class="metrics">
+      <span class="pill">${fmt(r.price, 2)} 元</span>
+      <span class="pill ${kCls}">K=${k != null ? fmt(k,0) : 'N/A'}</span>
+      <span class="pill">20MA ${fmt(r.ma20,1)}</span>
+      <span class="pill">42MA ${fmt(r.ma42,1)}</span>
+      <span class="pill">60MA ${fmt(r.ma60,1)}</span>
+      <span class="pill ${r.ma42_rising ? 'ok' : 'warn'}">42MA${r.ma42_rising ? '↑' : '↓'}</span>
+      <span class="pill ${r.dif_above_signal ? 'ok' : ''}">DIF${r.dif_above_signal ? '✅' : '─'}</span>
+      ${yoyVal != null ? `<span class="pill ok">YOY ${fmtPct(yoyVal)}</span>` : ''}
+      <span class="pill ${momCls}">MoM${momIcon}${r.mom_pct != null ? fmtPct(r.mom_pct) : 'N/A'}</span>
+      <span class="pill ${finCls}">財務${finIcon} 毛${gm != null ? fmt(gm,0)+'%' : '─'} 營${om != null ? fmt(om,0)+'%' : '─'}</span>
+      ${ic != null ? `<span class="pill ${ic > 15 ? 'ok' : 'warn'}">保障${fmt(ic,0)}x</span>` : ''}
+      ${volIcon ? `<span class="pill ok">${volIcon} 量增</span>` : ''}
+      ${r.channel?.alert ? `<span class="pill warn">通道${escHtml(r.channel.alert)}</span>` : ''}
+    </div>
+    ${failReasons}
+  </div>`;
+}
+
+function showError(msg) {
+  const b = document.getElementById('errorBox');
+  b.style.display = '';
+  b.innerHTML = `<div class="error-box">⚠️ ${escHtml(msg)}</div>`;
+}
+
+async function triggerManualScan() {
+  const btn  = document.getElementById('manualScanBtn');
+  const icon = document.getElementById('manualScanIcon');
+  const msg  = document.getElementById('manualScanMsg');
+  btn.disabled = true;
+  icon.textContent = '⏳';
+  msg.style.display = 'none';
+
+  const params = {
+    k_threshold:      parseInt(document.getElementById('kThreshold').value)   || 30,
+    yoy_min:          parseFloat(document.getElementById('yoyMin').value)      || 15,
+    gross_margin_min: parseFloat(document.getElementById('grossMargin').value) || 25,
+    op_margin_min:    parseFloat(document.getElementById('opMargin').value)    || 15,
+    fin_block:        document.getElementById('finBlock').value === 'true',
+  };
+
+  try {
+    const r = await fetch('/api/scan/manual', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(params),
+    });
+    const d = await r.json();
+    msg.style.display = 'block';
+    if (r.ok) {
+      msg.className   = 'manual-msg-ok';
+      msg.textContent = '✅ ' + d.message;
+      window._paramsFilled = false;  // 掃描完成後允許用新的params刷新顯示
+    } else {
+      msg.className   = 'manual-msg-err';
+      msg.textContent = '❌ ' + (d.error || '觸發失敗');
+    }
+  } catch(e) {
+    msg.style.display = 'block';
+    msg.className   = 'manual-msg-err';
+    msg.textContent = '❌ 連線失敗';
+  }
+
+  setTimeout(() => {
+    btn.disabled     = false;
+    icon.textContent = '▶';
+  }, 3000);
+}
+
+// ── 啟動：立刻拉一次狀態，之後每5秒輪詢，偵測到新掃描完成就自動更新畫面 ──
+let hasScrolledOnce = false;
+pollStatus();                              // 立刻執行一次
+setInterval(pollStatus, 5000);            // 之後每5秒更新狀態列（進度條/時鐘）
+
+async function doLogout() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  window.location.href = '/login';
+}
+
+(async () => {
+  try {
+    const r = await fetch('/api/auth/me');
+    if (!r.ok) { window.location.href = '/login'; return; }
+    const d = await r.json();
+    if (!d.logged_in) { window.location.href = '/login'; return; }
+    const bar   = document.getElementById('authBar');
+    const badge = document.getElementById('authTypeBadge');
+    const exp   = document.getElementById('authExp');
+    badge.textContent = d.label;
+    badge.className   = 'auth-type-badge ' + d.type;
+    exp.textContent   = '有效至 ' + d.expires;
+    bar.style.display = 'flex';
+
+    // 根據身份決定左側面板
+    if (d.type === 'admin') {
+      document.getElementById('adminParamBlock').style.display = 'block';
+      document.getElementById('adminScanBlock').style.display  = 'block';
+      document.getElementById('paramSectionTitle').textContent = '📋 篩選條件（可調整）';
+    } else {
+      document.getElementById('paramReadonly').style.display = 'block';
+      document.getElementById('viewerBlock').style.display   = 'block';
+      document.getElementById('paramSectionTitle').textContent = '📋 目前篩選條件';
+      const el2 = document.getElementById('autoIntervalMin2');
+      if (el2) el2.textContent = document.getElementById('autoIntervalMin').textContent;
+    }
+  } catch(e) { window.location.href = '/login'; }
+})();
+
+</script>
+</body>
+</html>

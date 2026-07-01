@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登入 — 台股掃描系統</title>
+<style>
+  :root {
+    --bg: #f5f5f3; --surface: #ffffff; --surface2: #f0efeb;
+    --border: rgba(0,0,0,0.1); --border2: rgba(0,0,0,0.22);
+    --text: #1a1a18; --text2: #5f5e5a; --text3: #888780;
+    --blue: #378ADD; --blue-bg: #E6F1FB; --blue-text: #185FA5;
+    --green: #1D9E75; --green-bg: #E1F5EE; --green-text: #0F6E56;
+    --red: #E24B4A; --red-bg: #FCEBEB; --red-text: #A32D2D;
+    --amber-bg: #FAEEDA; --amber-text: #854F0B;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a18; --surface: #242422; --surface2: #2e2e2c;
+      --border: rgba(255,255,255,0.1); --border2: rgba(255,255,255,0.22);
+      --text: #e8e7e3; --text2: #a8a79f; --text3: #6e6d68;
+      --blue-bg: #0C447C; --blue-text: #85B7EB;
+      --green-bg: #085041; --green-text: #5DCAA5;
+      --red-bg: #791F1F; --red-text: #F09595;
+      --amber-bg: #633806; --amber-text: #FAC775;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Noto Sans TC', sans-serif;
+    background: var(--bg); color: var(--text);
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 1rem;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 0.5px solid var(--border2);
+    border-radius: 16px;
+    width: 100%; max-width: 400px;
+    padding: 2.5rem 2rem;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+  }
+
+  .logo-row {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 2rem;
+  }
+  .logo-icon {
+    width: 48px; height: 48px; border-radius: 12px;
+    background: var(--blue-bg);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px;
+  }
+  .logo-title { font-size: 18px; font-weight: 600; }
+  .logo-sub   { font-size: 12px; color: var(--text3); margin-top: 2px; }
+
+  .field { margin-bottom: 1.25rem; }
+  .field label {
+    display: block; font-size: 13px; color: var(--text2);
+    margin-bottom: 6px; font-weight: 500;
+  }
+  .field input {
+    width: 100%; padding: 10px 14px; border-radius: 8px;
+    border: 0.5px solid var(--border2);
+    background: var(--surface2); color: var(--text);
+    font-size: 15px; outline: none;
+    transition: border-color 0.15s;
+  }
+  .field input:focus { border-color: var(--blue); }
+
+  .btn {
+    width: 100%; padding: 12px; border-radius: 8px;
+    border: none; cursor: pointer; font-size: 15px; font-weight: 500;
+    background: var(--blue); color: #fff;
+    transition: opacity 0.15s; margin-top: 0.25rem;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .btn:hover:not(:disabled) { opacity: 0.88; }
+
+  .msg {
+    margin-top: 1rem; padding: 10px 14px; border-radius: 8px;
+    font-size: 13px; display: none;
+  }
+  .msg.error   { background: var(--red-bg);   color: var(--red-text); }
+  .msg.success { background: var(--green-bg); color: var(--green-text); }
+
+  .hint {
+    margin-top: 1.5rem; padding-top: 1.25rem;
+    border-top: 0.5px solid var(--border);
+  }
+  .hint-title { font-size: 11px; font-weight: 600; color: var(--text3);
+                text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+  .hint-item {
+    display: flex; align-items: flex-start; gap: 10px;
+    margin-bottom: 8px;
+  }
+  .hint-badge {
+    padding: 2px 8px; border-radius: 99px; font-size: 11px;
+    font-weight: 600; white-space: nowrap; flex-shrink: 0;
+  }
+  .badge-trial { background: var(--amber-bg); color: var(--amber-text); }
+  .badge-full  { background: var(--green-bg); color: var(--green-text); }
+  .hint-text { font-size: 12px; color: var(--text2); }
+
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.4);
+    border-top-color: #fff; border-radius: 50%;
+    animation: spin 0.7s linear infinite; display: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo-row">
+    <div class="logo-icon">📊</div>
+    <div>
+      <div class="logo-title">台股掃描系統</div>
+      <div class="logo-sub">v4.9 撿股讚整合版 — 請先登入</div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="pw">存取密碼</label>
+    <input type="password" id="pw" placeholder="請輸入密碼" autocomplete="current-password"
+           onkeydown="if(event.key==='Enter') doLogin()">
+  </div>
+
+  <button class="btn" id="loginBtn" onclick="doLogin()">
+    <div class="spinner" id="spinner"></div>
+    <span id="btnText">登入</span>
+  </button>
+
+  <div class="msg" id="msg"></div>
+
+  <div class="hint">
+    <div class="hint-title">帳號類型說明</div>
+    <div class="hint-item">
+      <span class="hint-badge badge-trial">試用</span>
+      <span class="hint-text">試用密碼：登入後可使用 <strong>1 天</strong>，到期後需重新輸入</span>
+    </div>
+    <div class="hint-item">
+      <span class="hint-badge badge-full">正式</span>
+      <span class="hint-text">正式密碼：登入後可使用 <strong>180 天</strong>（6 個月）</span>
+    </div>
+  </div>
+</div>
+
+<script>
+async function doLogin() {
+  const pw  = document.getElementById('pw').value.trim();
+  const btn = document.getElementById('loginBtn');
+  const msg = document.getElementById('msg');
+  const sp  = document.getElementById('spinner');
+  const bt  = document.getElementById('btnText');
+
+  if (!pw) { showMsg('error', '請輸入密碼'); return; }
+
+  btn.disabled = true;
+  sp.style.display = 'block';
+  bt.textContent = '驗證中...';
+  msg.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw }),
+    });
+    const data = await r.json();
+
+    if (r.ok) {
+      showMsg('success', '✅ ' + data.message + '，正在跳轉...');
+      setTimeout(() => { window.location.href = '/'; }, 1200);
+    } else {
+      showMsg('error', '❌ ' + (data.error || '密碼錯誤'));
+      btn.disabled = false;
+      sp.style.display = 'none';
+      bt.textContent = '登入';
+    }
+  } catch(e) {
+    showMsg('error', '❌ 無法連線，請稍後重試');
+    btn.disabled = false;
+    sp.style.display = 'none';
+    bt.textContent = '登入';
+  }
+}
+
+function showMsg(type, text) {
+  const el = document.getElementById('msg');
+  el.className = 'msg ' + type;
+  el.textContent = text;
+  el.style.display = 'block';
+}
+</script>
+</body>
+</html>
