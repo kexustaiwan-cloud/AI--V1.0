@@ -384,8 +384,18 @@ def _result_to_dict(r: dict) -> dict:
             except: out[k] = str(v)
     return out
 
+_cancel_event = threading.Event()   # 設定後，正在跑的掃描會在下一個檢查點中止
+
+class ScanCancelled(Exception):
+    pass
+
+def _check_cancel():
+    if _cancel_event.is_set():
+        raise ScanCancelled('管理員已中斷掃描')
+
 def _run_one_scan():
     """執行一次完整掃描，更新全域共用結果（所有人看到的都是同一份）"""
+    _cancel_event.clear()   # 每次開始都先清掉舊的取消旗標
     with _latest_lock:
         _latest['running'] = True
         _latest['error'] = None
@@ -399,6 +409,7 @@ def _run_one_scan():
         sc.OP_MARGIN_MIN     = SCAN_PARAMS['op_margin_min']
         sc.FIN_BLOCK_ON_FAIL = SCAN_PARAMS['fin_block']
 
+        _check_cancel()
         _add_log('抓取撿股讚基本面資料...', 8)
         fund_df, html = sc.fetch_wespai_fundamental(force=True)
         if fund_df.empty:
@@ -406,13 +417,16 @@ def _run_one_scan():
                 _latest['error'] = '無法取得撿股讚資料，下次排程會重試'
                 _latest['running'] = False
             return
+        _check_cancel()
         _add_log(f'撿股讚抓到 {len(fund_df)} 檔', 18)
         fund_set = sc.build_fundamental_filter(fund_df)
         stocks   = sc.build_yoy_stocks(fund_df, fund_set)
         _add_log(f'YOY≥{sc.YOY_MIN_PCT:.0f}% 達標：{len(stocks)} 檔', 25)
+        _check_cancel()
         _add_log('抓取月增率資料...', 30)
         mom_dict = sc.fetch_mom_data(list(stocks.keys()), wespai_html=html, force=True)
         _add_log(f'MoM資料：{len(mom_dict)} 檔', 38)
+        _check_cancel()
         _add_log('抓取財務品質資料...', 42)
         df_fin  = sc.fetch_wespai_fin_quality(force=True)
         fin_dict= sc.fetch_fin_quality_batch(stocks, force=True, df_fin_wespai=df_fin)
@@ -420,17 +434,21 @@ def _run_one_scan():
         scan_st = {c:n for c,n in stocks.items() if c in fin_set} \
                   if sc.FIN_BLOCK_ON_FAIL else stocks
         _add_log(f'財務篩選後：{len(scan_st)} 檔', 50)
+        _check_cancel()
         _add_log('計算大盤狀態...', 53)
         regime  = sc.calc_market_regime(force=True)
+        _check_cancel()
         _add_log('掃描主動式ETF...', 57)
         active_etfs   = sc.fetch_active_etf_list(force=True)
         active_params = sc.get_active_params(datetime.now(TW_TZ))
         etf_results   = [_result_to_dict(sc.analyze_etf(t,n,active_params))
                          for t,n in active_etfs.items()]
         _add_log(f'ETF完成：{len(etf_results)} 檔', 62)
+        _check_cancel()
         _add_log(f'個股掃描共 {len(scan_st)} 檔...', 65)
         results = []; total = len(scan_st) or 1
         for i,(tid,name) in enumerate(scan_st.items()):
+            _check_cancel()
             r = sc.analyze_stock(tid, name, sc._guess_mtype(tid),
                                  entry_price=None, active_params=active_params,
                                  mom_pct=sc.get_mom_pct(tid,fund_df,mom_dict),
@@ -453,6 +471,12 @@ def _run_one_scan():
                 'error': None, 'progress': 100,
             })
         _add_log(f'✅ 掃描完成！{len(results)} 檔個股 + {len(etf_results)} 檔ETF', 100)
+    except ScanCancelled as e:
+        with _latest_lock:
+            _latest['running'] = False
+            _latest['progress'] = 0
+            _latest['error'] = None   # 取消是正常操作，不顯示為錯誤
+        _add_log(f'⏹ {e}')
     except Exception as e:
         with _latest_lock:
             _latest['error']   = str(e)
@@ -496,28 +520,34 @@ def index():
 @app.route('/api/scan/manual', methods=['POST'])
 @login_required
 def api_scan_manual():
-    """只有管理員可以手動立刻觸發一次掃描，並同時更新篩選條件"""
+    """管理員：套用新篩選條件並立刻掃描；若掃描正在執行中，先中斷再重啟"""
     s = _get_session()
     if not s or s['pw_type'] != 'admin':
         return jsonify({'error': '需要管理員權限'}), 403
-    with _latest_lock:
-        if _latest['running']:
-            return jsonify({'error': '掃描已在執行中，請稍候'}), 429
 
-    # 讀取管理員送來的新篩選條件，有送就套用，沒送就維持現有值
     body = request.get_json(silent=True) or {}
     if body.get('k_threshold')      is not None: SCAN_PARAMS['k_threshold']      = int(body['k_threshold'])
     if body.get('yoy_min')          is not None: SCAN_PARAMS['yoy_min']          = float(body['yoy_min'])
     if body.get('gross_margin_min') is not None: SCAN_PARAMS['gross_margin_min'] = float(body['gross_margin_min'])
     if body.get('op_margin_min')    is not None: SCAN_PARAMS['op_margin_min']    = float(body['op_margin_min'])
     if body.get('fin_block')        is not None: SCAN_PARAMS['fin_block']        = bool(body['fin_block'])
-
-    # 同步更新 _latest 裡顯示的 params，讓前端立刻看到最新條件
     with _latest_lock:
         _latest['params'] = dict(SCAN_PARAMS)
+        is_running = _latest['running']
+
+    if is_running:
+        _cancel_event.set()
+        _add_log('⏹ 管理員中斷目前掃描，套用新條件後重新啟動...')
+        for _ in range(30):          # 最多等 3 秒讓舊掃描退出
+            time.sleep(0.1)
+            with _latest_lock:
+                if not _latest['running']:
+                    break
 
     threading.Thread(target=_run_one_scan, daemon=True).start()
-    return jsonify({'ok': True, 'message': f'已套用新條件並觸發掃描，K≤{SCAN_PARAMS["k_threshold"]} / YOY≥{SCAN_PARAMS["yoy_min"]}%'})
+    action = '已中斷舊掃描，' if is_running else ''
+    return jsonify({'ok': True,
+                    'message': f'{action}套用新條件並重新掃描 — K≤{SCAN_PARAMS["k_threshold"]} / YOY≥{SCAN_PARAMS["yoy_min"]}%'})
 
 @app.route('/api/status')
 @login_required

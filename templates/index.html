@@ -438,10 +438,23 @@ async function pollStatus() {
       dot.className = 'auto-status-dot busy';
       const lastLog = (s.log || []).slice(-1)[0] || '';
       const msg = lastLog.replace(/\[\d+:\d+:\d+\]\s*/, '');
-      text.textContent = `掃描中... ${msg ? '('+msg+')' : ''} ${s.progress||0}%`;
+      text.textContent = `掃描中... ${msg ? '(' + msg + ')' : ''} ${s.progress || 0}%`;
+      // 按鈕改成「中斷並重新掃描」
+      const btn2 = document.getElementById('manualScanBtn');
+      if (btn2 && !btn2.disabled) {
+        document.getElementById('manualScanIcon').textContent = '⏹';
+        btn2.style.background = 'var(--red)';
+        btn2.childNodes[btn2.childNodes.length - 1].textContent = ' 中斷並重新套用條件';
+      }
     } else {
       dot.className = 'auto-status-dot live';
       text.textContent = '系統運作中（自動排程）';
+      const btn2 = document.getElementById('manualScanBtn');
+      if (btn2 && !btn2.disabled) {
+        document.getElementById('manualScanIcon').textContent = '▶';
+        btn2.style.background = 'var(--blue)';
+        btn2.childNodes[btn2.childNodes.length - 1].textContent = ' 套用條件並立刻掃描';
+      }
     }
 
     document.getElementById('autoLastScan').textContent = '上次掃描：' + fmtDT(s.last_scan);
