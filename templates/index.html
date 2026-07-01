@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>台股掃描系統</title>
+<style>
+:root {
+  --bg:#f5f5f3; --surface:#fff; --s2:#f0efeb;
+  --bd:rgba(0,0,0,.1); --bd2:rgba(0,0,0,.2);
+  --tx:#1a1a18; --tx2:#5f5e5a; --tx3:#888780;
+  --blue:#378ADD; --blue-bg:#E6F1FB; --blue-tx:#185FA5;
+  --green:#1D9E75; --green-bg:#E1F5EE; --green-tx:#0F6E56;
+  --red:#E24B4A; --red-bg:#FCEBEB; --red-tx:#A32D2D;
+  --amber:#BA7517; --amber-bg:#FAEEDA; --amber-tx:#854F0B;
+  --gray-bg:#F1EFE8; --gray-tx:#5F5E5A;
+  --coral-bg:#FAECE7; --coral-tx:#993C1D;
+}
+@media(prefers-color-scheme:dark){
+  :root{
+    --bg:#1a1a18;--surface:#242422;--s2:#2e2e2c;
+    --bd:rgba(255,255,255,.1);--bd2:rgba(255,255,255,.2);
+    --tx:#e8e7e3;--tx2:#a8a79f;--tx3:#6e6d68;
+    --blue-bg:#0C447C;--blue-tx:#85B7EB;
+    --green-bg:#085041;--green-tx:#5DCAA5;
+    --red-bg:#791F1F;--red-tx:#F09595;
+    --amber-bg:#633806;--amber-tx:#FAC775;
+    --gray-bg:#2C2C2A;--gray-tx:#B4B2A9;
+    --coral-bg:#712B13;--coral-tx:#F0997B;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif;
+     background:var(--bg);color:var(--tx);font-size:14px}
+
+/* ── Top progress bar ── */
+#topProg{position:fixed;top:0;left:0;right:0;z-index:9999;height:3px}
+#topProgFill{height:100%;width:0%;background:var(--blue);
+             transition:width .5s ease;box-shadow:0 0 6px var(--blue)}
+#scanBanner{position:fixed;top:3px;left:50%;transform:translateX(-50%);
+            z-index:9998;background:var(--surface);
+            border:0.5px solid var(--bd2);border-radius:0 0 8px 8px;
+            padding:4px 16px 5px;font-size:12px;color:var(--tx2);
+            display:none;align-items:center;gap:8px;white-space:nowrap;
+            box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--blue);
+     animation:pulse 1s ease-in-out infinite;flex-shrink:0}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ── Layout ── */
+.layout{display:grid;grid-template-columns:260px 1fr;min-height:100vh}
+.sidebar{background:var(--surface);border-right:.5px solid var(--bd);
+         padding:1.25rem 1rem;position:sticky;top:0;height:100vh;overflow-y:auto}
+.main{padding:1.5rem;overflow:hidden}
+
+/* ── Auth bar ── */
+.auth-bar{position:fixed;top:0;right:0;z-index:999;
+          display:flex;align-items:center;gap:8px;
+          padding:6px 14px;background:var(--surface);
+          border-bottom:.5px solid var(--bd);border-left:.5px solid var(--bd);
+          border-radius:0 0 0 10px;font-size:12px}
+.auth-badge{padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
+.badge-admin{background:var(--blue-bg);color:var(--blue-tx)}
+.badge-full {background:var(--green-bg);color:var(--green-tx)}
+.badge-trial{background:var(--amber-bg);color:var(--amber-tx)}
+.btn-logout{padding:3px 10px;border-radius:5px;font-size:11px;
+            border:.5px solid var(--bd2);background:transparent;color:var(--tx3);
+            cursor:pointer;transition:all .15s}
+.btn-logout:hover{background:var(--red-bg);color:var(--red-tx);border-color:transparent}
+
+/* ── Sidebar logo ── */
+.logo{display:flex;align-items:center;gap:10px;margin-bottom:1.25rem;
+      padding-bottom:1rem;border-bottom:.5px solid var(--bd)}
+.logo-icon{width:36px;height:36px;border-radius:8px;background:var(--blue-bg);
+           display:flex;align-items:center;justify-content:center;font-size:18px}
+.logo-text{font-weight:600;font-size:14px}
+.logo-sub{font-size:11px;color:var(--tx3)}
+
+/* ── Sidebar sections ── */
+.sb-title{font-size:11px;font-weight:600;color:var(--tx3);
+          text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+.sb-section{margin-bottom:1.25rem}
+.field-row{margin-bottom:8px}
+.field-label{font-size:12px;color:var(--tx2);margin-bottom:3px}
+.field-row input,.field-row select{
+  width:100%;padding:6px 10px;border-radius:6px;font-size:13px;
+  border:.5px solid var(--bd2);background:var(--s2);color:var(--tx);outline:none}
+.field-row input:focus,.field-row select:focus{border-color:var(--blue)}
+
+/* ── Buttons ── */
+.btn-run{width:100%;padding:10px;border-radius:8px;font-size:14px;font-weight:500;
+         background:var(--blue);color:#fff;border:none;cursor:pointer;
+         display:flex;align-items:center;justify-content:center;gap:8px;
+         transition:opacity .15s;margin-top:.75rem}
+.btn-run:disabled{opacity:.55;cursor:not-allowed}
+.btn-run:hover:not(:disabled){opacity:.88}
+.btn-stop{width:100%;padding:8px;border-radius:8px;font-size:13px;font-weight:500;
+          background:transparent;color:var(--red-tx);
+          border:.5px solid var(--red);cursor:pointer;margin-top:6px;
+          transition:all .15s}
+.btn-stop:hover{background:var(--red-bg)}
+.btn-stop:disabled{opacity:.4;cursor:not-allowed}
+
+/* ── Status box ── */
+.status-box{background:var(--s2);border-radius:8px;padding:10px 12px;
+            font-size:12px;color:var(--tx2);margin-top:1rem;line-height:1.7}
+.status-box .label{font-size:11px;color:var(--tx3);font-weight:600;
+                   text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
+.status-row{display:flex;justify-content:space-between;align-items:center}
+.err-chip{color:var(--red-tx);font-size:11px;margin-top:4px}
+.ok-chip {color:var(--green-tx);font-size:11px;margin-top:4px}
+
+/* ── Member notice (shown when not admin) ── */
+.member-notice{background:var(--blue-bg);border-radius:8px;
+               padding:10px 12px;font-size:12px;color:var(--blue-tx);
+               margin-top:1rem;line-height:1.7}
+
+/* ── Main header ── */
+.page-hdr{display:flex;align-items:center;gap:12px;margin-bottom:1.25rem;flex-wrap:wrap}
+.page-title{font-size:20px;font-weight:600}
+.regime-pill{padding:4px 12px;border-radius:99px;font-size:12px;font-weight:500;
+             background:var(--s2);color:var(--tx2);border:.5px solid var(--bd)}
+.regime-pill.bull{background:var(--green-bg);color:var(--green-tx);border-color:transparent}
+.regime-pill.bear{background:var(--red-bg);color:var(--red-tx);border-color:transparent}
+.last-scan{font-size:12px;color:var(--tx3);margin-left:auto}
+
+/* ── Summary ── */
+.sum-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));
+          gap:10px;margin-bottom:1.25rem}
+.sum-card{background:var(--surface);border:.5px solid var(--bd);
+          border-radius:10px;padding:12px 16px}
+.sum-num{font-size:22px;font-weight:600}
+.sum-label{font-size:11px;color:var(--tx3);margin-top:2px}
+
+/* ── Tabs ── */
+.tabs{display:flex;gap:4px;margin-bottom:1.25rem;flex-wrap:wrap}
+.tab{padding:6px 14px;border-radius:6px;font-size:13px;cursor:pointer;
+     border:.5px solid var(--bd);color:var(--tx2);background:var(--surface);
+     transition:all .15s;white-space:nowrap}
+.tab.active{background:var(--blue-bg);color:var(--blue-tx);border-color:transparent}
+.tab-c{display:inline-block;background:var(--s2);color:var(--tx3);
+       border-radius:99px;padding:0 6px;font-size:10px;margin-left:4px}
+.tab.active .tab-c{background:rgba(0,0,0,.12);color:inherit}
+
+/* ── Stock cards ── */
+.stocks-list{display:flex;flex-direction:column;gap:8px}
+.sc{background:var(--surface);border:.5px solid var(--bd);
+    border-radius:10px;padding:12px 14px;border-left:3px solid transparent}
+.sc.A   {border-left-color:var(--green)}
+.sc.B   {border-left-color:var(--blue)}
+.sc.C   {border-left-color:var(--amber)}
+.sc.D   {border-left-color:var(--gray-tx)}
+.sc.exit{border-left-color:var(--red)}
+.sc.fin {border-left-color:var(--coral-tx)}
+.sc.etf-s{border-left-color:var(--green)}
+.sc.etf-b{border-left-color:var(--blue)}
+
+.sc-top{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.sc-code{font-size:15px;font-weight:600}
+.sc-name{font-size:13px;color:var(--tx2)}
+.sc-ind{font-size:11px;color:var(--tx3);padding:1px 7px;border-radius:99px;
+        background:var(--s2);border:.5px solid var(--bd)}
+.sc-ind.p{background:var(--amber-bg);color:var(--amber-tx);border-color:transparent}
+.sc-badge{margin-left:auto;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600}
+.b-A   {background:var(--green-bg);color:var(--green-tx)}
+.b-B   {background:var(--blue-bg);color:var(--blue-tx)}
+.b-C   {background:var(--amber-bg);color:var(--amber-tx)}
+.b-D   {background:var(--gray-bg);color:var(--gray-tx)}
+.b-exit{background:var(--red-bg);color:var(--red-tx)}
+.b-fin {background:var(--coral-bg);color:var(--coral-tx)}
+.b-etf-s{background:var(--green-bg);color:var(--green-tx)}
+.b-etf-b{background:var(--blue-bg);color:var(--blue-tx)}
+.b-watch{background:var(--s2);color:var(--tx3)}
+
+.metrics{display:flex;flex-wrap:wrap;gap:5px}
+.pill{font-size:11px;padding:2px 8px;border-radius:99px;
+      background:var(--s2);color:var(--tx2);border:.5px solid var(--bd);white-space:nowrap}
+.pill.ok  {background:var(--green-bg);color:var(--green-tx);border-color:transparent}
+.pill.warn{background:var(--amber-bg);color:var(--amber-tx);border-color:transparent}
+.pill.bad {background:var(--red-bg);color:var(--red-tx);border-color:transparent}
+.sc-note{font-size:11px;color:var(--tx3);margin-top:6px}
+
+/* ── Section header ── */
+.sec-hdr{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.sec-label{font-size:13px;font-weight:600}
+.sec-count{margin-left:auto;font-size:12px;color:var(--tx3)}
+
+/* ── Error / Empty ── */
+.err-box{background:var(--red-bg);color:var(--red-tx);border-radius:8px;
+         padding:12px 16px;font-size:13px;margin-bottom:1rem}
+.empty{text-align:center;padding:3rem 1rem;color:var(--tx3)}
+.empty-ico{font-size:40px;margin-bottom:12px}
+.empty h3{font-size:16px;font-weight:500;color:var(--tx2);margin-bottom:6px}
+
+@media(max-width:768px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{position:static;height:auto;border-right:none;border-bottom:.5px solid var(--bd)}
+  .main{padding:1rem}
+}
+</style>
+</head>
+<body>
+
+<div id="topProg"><div id="topProgFill"></div></div>
+<div id="scanBanner"><div class="dot"></div><span id="bannerTxt">掃描中...</span></div>
+
+<div class="auth-bar" id="authBar" style="display:none">
+  <span class="auth-badge" id="authBadge"></span>
+  <span id="authExp" style="color:var(--tx3);font-size:11px"></span>
+  <a href="/admin" id="adminLink" style="font-size:11px;color:var(--blue);display:none">後台</a>
+  <button class="btn-logout" onclick="doLogout()">登出</button>
+</div>
+
+<div class="layout">
+
+<!-- ══ Sidebar ══ -->
+<aside class="sidebar">
+  <div class="logo">
+    <div class="logo-icon">📊</div>
+    <div><div class="logo-text">台股掃描系統</div>
+         <div class="logo-sub">v7.0 撿股讚整合版</div></div>
+  </div>
+
+  <!-- 管理員控制區（只有 admin 看到） -->
+  <div id="adminPanel" style="display:none">
+    <div class="sb-section">
+      <div class="sb-title">掃描參數</div>
+      <div class="field-row">
+        <div class="field-label">K值門檻（≤）</div>
+        <input type="number" id="pK" value="30" min="10" max="50">
+      </div>
+      <div class="field-row">
+        <div class="field-label">YOY 年增率下限 (%)</div>
+        <input type="number" id="pYoy" value="15" min="0" max="100">
+      </div>
+      <div class="field-row">
+        <div class="field-label">毛利率門檻 (%)</div>
+        <input type="number" id="pGm" value="25" min="0" max="80">
+      </div>
+      <div class="field-row">
+        <div class="field-label">營業利益率門檻 (%)</div>
+        <input type="number" id="pOm" value="15" min="0" max="60">
+      </div>
+      <div class="field-row">
+        <div class="field-label">財務篩選模式</div>
+        <select id="pFin">
+          <option value="true">擋掉不達標</option>
+          <option value="false">僅標記</option>
+        </select>
+      </div>
+      <button class="btn-run" id="btnRun" onclick="startScan()">▶ 開始掃描</button>
+      <button class="btn-stop" id="btnStop" onclick="stopScan()" disabled>⏹ 中斷掃描</button>
+    </div>
+
+    <div class="status-box" id="adminStatus">
+      <div class="label">掃描狀態</div>
+      <div class="status-row">
+        <span id="stLabel">尚未掃描</span>
+        <span id="stPct" style="color:var(--tx3)"></span>
+      </div>
+      <div id="stLog" style="margin-top:4px;font-size:11px;color:var(--tx3)"></div>
+      <div id="stErr" class="err-chip" style="display:none"></div>
+      <div id="stOk"  class="ok-chip"  style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- 會員提示（非 admin） -->
+  <div id="memberPanel" style="display:none">
+    <div class="member-notice">
+      📋 本頁顯示最新掃描結果<br>
+      結果由管理員定期執行更新<br>
+      <span style="color:var(--tx3);font-size:11px">每次掃描約需 3~5 分鐘</span>
+    </div>
+    <div class="status-box" style="margin-top:0.75rem">
+      <div class="label">上次掃描</div>
+      <div id="memberLastScan" style="margin-top:2px">─</div>
+    </div>
+  </div>
+</aside>
+
+<!-- ══ Main ══ -->
+<main class="main">
+  <div class="page-hdr">
+    <div class="page-title">掃描結果</div>
+    <span class="regime-pill" id="regimePill">尚未掃描</span>
+    <span class="last-scan" id="lastScan"></span>
+  </div>
+
+  <div id="errBox" style="display:none"></div>
+
+  <div id="sumGrid" style="display:none" class="sum-grid">
+    <div class="sum-card"><div class="sum-num" id="sA" style="color:var(--green)">─</div>
+      <div class="sum-label">⭐⭐⭐ A類進場</div></div>
+    <div class="sum-card"><div class="sum-num" id="sBCD" style="color:var(--blue)">─</div>
+      <div class="sum-label">B/C/D 類</div></div>
+    <div class="sum-card"><div class="sum-num" id="sEtf" style="color:var(--green)">─</div>
+      <div class="sum-label">📡 ETF 訊號</div></div>
+    <div class="sum-card"><div class="sum-num" id="sExit" style="color:var(--red)">─</div>
+      <div class="sum-label">🔴 出場</div></div>
+    <div class="sum-card"><div class="sum-num" id="sTotal">─</div>
+      <div class="sum-label">總掃描</div></div>
+    <div class="sum-card"><div class="sum-num" id="sYoy" style="color:var(--blue)">─</div>
+      <div class="sum-label">YOY 達標</div></div>
+    <div class="sum-card"><div class="sum-num" id="sFp" style="color:var(--green)">─</div>
+      <div class="sum-label">財務達標</div></div>
+    <div class="sum-card"><div class="sum-num" id="sFf" style="color:var(--red)">─</div>
+      <div class="sum-label">財務不達標</div></div>
+  </div>
+
+  <div class="tabs" id="tabsRow" style="display:none"></div>
+  <div id="stocksArea">
+    <div class="empty">
+      <div class="empty-ico">📈</div>
+      <h3>等待掃描結果</h3>
+      <p id="emptyMsg">管理員執行掃描後結果會顯示在這裡</p>
+    </div>
+  </div>
+</main>
+</div>
+
+<script>
+const PRIO = ['AI','伺服器','散熱','液冷','IC設計','半導體','晶圓','封裝',
+              '測試','設備','連接器','PCB','電路板','被動元件','網通','資安'];
+
+let allResults=[], etfResults=[], curTab='all', userType='';
+let polling=null;
+
+// ── Auth init ──────────────────────────────────────────────────────────────
+(async()=>{
+  try{
+    const r = await fetch('/api/auth/me');
+    if(!r.ok){ window.location.href='/login'; return; }
+    const d = await r.json();
+    if(!d.logged_in){ window.location.href='/login'; return; }
+    userType = d.type;
+    const bar   = document.getElementById('authBar');
+    const badge = document.getElementById('authBadge');
+    badge.textContent = d.label;
+    badge.className   = 'auth-badge badge-'+d.type;
+    document.getElementById('authExp').textContent = '有效至 '+d.expires;
+    bar.style.display = 'flex';
+
+    if(d.type==='admin'){
+      document.getElementById('adminPanel').style.display='block';
+      document.getElementById('adminLink').style.display='inline';
+    } else {
+      document.getElementById('memberPanel').style.display='block';
+    }
+    startPolling();
+    loadResults();
+  }catch(e){ window.location.href='/login'; }
+})();
+
+async function doLogout(){
+  await fetch('/api/auth/logout',{method:'POST'});
+  window.location.href='/login';
+}
+
+// ── Scan controls (admin only) ─────────────────────────────────────────────
+async function startScan(){
+  const params = {
+    k_threshold:      parseInt(document.getElementById('pK').value),
+    yoy_min:          parseFloat(document.getElementById('pYoy').value),
+    gross_margin_min: parseFloat(document.getElementById('pGm').value),
+    op_margin_min:    parseFloat(document.getElementById('pOm').value),
+    fin_block:        document.getElementById('pFin').value==='true',
+  };
+  const r = await fetch('/api/scan/start',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(params)
+  });
+  const d = await r.json();
+  if(!r.ok){ alert(d.error||'啟動失敗'); return; }
+  setStOk(d.message);
+}
+
+async function stopScan(){
+  const r = await fetch('/api/scan/stop',{method:'POST'});
+  const d = await r.json();
+  setStOk(d.message||'已中斷');
+}
+
+// ── Polling ────────────────────────────────────────────────────────────────
+function startPolling(){
+  if(polling) return;
+  polling = setInterval(poll, 1500);
+}
+
+async function poll(){
+  try{
+    const s = await (await fetch('/api/status')).json();
+    updateProgress(s);
+    if(s.last_scan && !s.running){
+      await loadResults();
+    }
+  }catch(e){}
+}
+
+function updateProgress(s){
+  const pct = s.progress||0;
+  document.getElementById('topProgFill').style.width = pct+'%';
+  const banner = document.getElementById('scanBanner');
+
+  if(s.running){
+    banner.style.display='flex';
+    document.getElementById('bannerTxt').textContent =
+      (s.last_log||'掃描中...')+' '+pct+'%';
+    if(userType==='admin'){
+      document.getElementById('stLabel').textContent='掃描中...';
+      document.getElementById('stPct').textContent=pct+'%';
+      document.getElementById('stLog').textContent=s.last_log||'';
+      document.getElementById('stErr').style.display='none';
+      document.getElementById('btnRun').disabled=true;
+      document.getElementById('btnStop').disabled=false;
+    }
+  } else {
+    banner.style.display='none';
+    if(pct===100){ setTimeout(()=>{
+      document.getElementById('topProgFill').style.width='0%';
+    },1200); }
+    if(userType==='admin'){
+      document.getElementById('btnRun').disabled=false;
+      document.getElementById('btnStop').disabled=true;
+      if(s.error){
+        document.getElementById('stLabel').textContent='掃描失敗';
+        document.getElementById('stPct').textContent='';
+        document.getElementById('stLog').textContent='';
+        document.getElementById('stErr').textContent='❌ '+s.error;
+        document.getElementById('stErr').style.display='block';
+        document.getElementById('stOk').style.display='none';
+      } else if(s.last_scan){
+        document.getElementById('stLabel').textContent='上次成功完成';
+        document.getElementById('stPct').textContent='';
+        document.getElementById('stLog').textContent=
+          new Date(s.last_scan).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'});
+      }
+    }
+  }
+  if(s.error && !s.running){
+    showErr('上次掃描錯誤：'+s.error);
+  } else {
+    document.getElementById('errBox').style.display='none';
+  }
+}
+
+function setStOk(msg){
+  if(userType!=='admin') return;
+  document.getElementById('stOk').textContent='✅ '+msg;
+  document.getElementById('stOk').style.display='block';
+  document.getElementById('stErr').style.display='none';
+  setTimeout(()=>{ document.getElementById('stOk').style.display='none'; },4000);
+}
+
+function showErr(msg){
+  const b = document.getElementById('errBox');
+  b.innerHTML='<div class="err-box">⚠️ '+esc(msg)+'</div>';
+  b.style.display='block';
+}
+
+// ── Load & render results ──────────────────────────────────────────────────
+async function loadResults(){
+  const r = await fetch('/api/results');
+  if(!r.ok) return;
+  const data = await r.json();
+  allResults   = data.results||[];
+  etfResults   = data.etf_results||[];
+  const regime = data.regime||{};
+  const stats  = data.stats||{};
+
+  // regime pill
+  const pill = document.getElementById('regimePill');
+  const sc = regime.score||0, nm = regime.name||'';
+  if(regime.regime_type==='bull'||sc>=60){
+    pill.className='regime-pill bull'; pill.textContent='多頭 '+nm+' '+sc+'分';
+  } else if(regime.regime_type==='bear'||sc<40){
+    pill.className='regime-pill bear'; pill.textContent='空頭 '+nm+' '+sc+'分';
+  } else {
+    pill.className='regime-pill'; pill.textContent='中性 '+nm+' '+sc+'分';
+  }
+
+  if(data.last_scan){
+    const ls = new Date(data.last_scan).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'});
+    document.getElementById('lastScan').textContent='上次掃描：'+ls;
+    document.getElementById('memberLastScan').textContent=ls;
+  }
+
+  // summary
+  const grpA  = allResults.filter(r=>r.entry_type==='A');
+  const grpBCD= allResults.filter(r=>['B','C','D'].includes(r.entry_type));
+  const grpEx = allResults.filter(r=>r.exit_signal&&!r.entry_type);
+  const etfSig= etfResults.filter(r=>r.etf_signal==='strong_buy'||r.etf_signal==='buy');
+  document.getElementById('sA').textContent   = grpA.length;
+  document.getElementById('sBCD').textContent = grpBCD.length;
+  document.getElementById('sEtf').textContent = etfSig.length;
+  document.getElementById('sExit').textContent= grpEx.length;
+  document.getElementById('sTotal').textContent=allResults.length;
+  document.getElementById('sYoy').textContent = stats.yoy_pass||'─';
+  document.getElementById('sFp').textContent  = stats.fin_pass||'─';
+  document.getElementById('sFf').textContent  = stats.fin_fail||'─';
+  document.getElementById('sumGrid').style.display='';
+
+  // params into sidebar inputs (admin)
+  if(data.params && userType==='admin'){
+    document.getElementById('pK').value   = data.params.k_threshold||30;
+    document.getElementById('pYoy').value = data.params.yoy_min||15;
+    document.getElementById('pGm').value  = data.params.gross_margin_min||25;
+    document.getElementById('pOm').value  = data.params.op_margin_min||15;
+    document.getElementById('pFin').value = data.params.fin_block?'true':'false';
+  }
+
+  renderTabs();
+  renderTab(curTab);
+}
+
+// ── Groups ─────────────────────────────────────────────────────────────────
+function grps(){
+  return {
+    A:     allResults.filter(r=>r.entry_type==='A'),
+    B:     allResults.filter(r=>r.entry_type==='B'),
+    C:     allResults.filter(r=>r.entry_type==='C'),
+    D:     allResults.filter(r=>r.entry_type==='D'),
+    exit:  allResults.filter(r=>r.exit_signal&&!r.entry_type&&!r.fin_blocked),
+    fin:   allResults.filter(r=>r.fin_blocked),
+    watch: allResults.filter(r=>!r.entry_type&&!r.exit_signal&&!r.fin_blocked&&!r.error),
+  };
+}
+
+function renderTabs(){
+  const g = grps();
+  const etfSig = etfResults.filter(r=>['strong_buy','buy'].includes(r.etf_signal));
+  const tabs=[
+    {id:'all',   label:'全部',    count:allResults.length+etfResults.length},
+    {id:'A',     label:'⭐⭐⭐ A類', count:g.A.length},
+    {id:'BCD',   label:'B/C/D',   count:g.B.length+g.C.length+g.D.length},
+    {id:'etf',   label:'📡 ETF',  count:etfSig.length},
+    {id:'exit',  label:'🔴 出場', count:g.exit.length},
+    {id:'watch', label:'觀察中',  count:g.watch.length},
+    {id:'fin',   label:'財務擋',  count:g.fin.length},
+  ].filter(t=>t.count>0||t.id==='all');
+  document.getElementById('tabsRow').style.display='';
+  document.getElementById('tabsRow').innerHTML=tabs.map(t=>
+    `<div class="tab ${curTab===t.id?'active':''}" onclick="switchTab('${t.id}')">
+       ${t.label}<span class="tab-c">${t.count}</span></div>`).join('');
+}
+
+function switchTab(id){ curTab=id; renderTabs(); renderTab(id); }
+
+function renderTab(id){
+  const g = grps();
+  const etfS = etfResults.filter(r=>r.etf_signal==='strong_buy');
+  const etfB = etfResults.filter(r=>r.etf_signal==='buy');
+  let secs=[];
+  if(id==='all'||id==='A')   secs.push({g:g.A,   cl:'A',     lb:'⭐⭐⭐ A類進場', desc:'42↑ 20↑ 60↑ + >60MA + DIF + K≤門檻'});
+  if(id==='all'||id==='BCD') secs.push({g:g.B,   cl:'B',     lb:'⭐⭐ B類進場',  desc:'42↑ + 突破20MA'});
+  if(id==='all'||id==='BCD') secs.push({g:g.C,   cl:'C',     lb:'⭐ C類進場',   desc:'>42MA <20MA + K≤門檻'});
+  if(id==='all'||id==='BCD') secs.push({g:g.D,   cl:'D',     lb:'⭐ D類進場',   desc:'>42MA + DIF + K≤門檻'});
+  if(id==='all'||id==='etf') secs.push({g:etfS,  cl:'etf-s', lb:'🟢 ETF強力買進',desc:'日K≤門檻'});
+  if(id==='all'||id==='etf') secs.push({g:etfB,  cl:'etf-b', lb:'🟡 ETF買進',   desc:'60分K≤門檻'});
+  if(id==='all'||id==='exit')secs.push({g:g.exit,cl:'exit',  lb:'🔴 出場訊號',  desc:'符合出場條件'});
+  if(id==='all'||id==='fin') secs.push({g:g.fin, cl:'fin',   lb:'🚫 財務擋掉',  desc:'財務品質不達標'});
+  if(id==='all'||id==='watch')secs.push({g:g.watch,cl:'watch',lb:'─ 觀察中',   desc:'條件尚未滿足'});
+
+  const html = secs.filter(s=>s.g.length>0).map(s=>`
+    <div style="margin-bottom:1.5rem">
+      <div class="sec-hdr">
+        <span class="sec-label">${esc(s.lb)}</span>
+        <span style="font-size:11px;color:var(--tx3)">— ${esc(s.desc)}</span>
+        <span class="sec-count">${s.g.length} 檔</span>
+      </div>
+      <div class="stocks-list">${s.g.map(r=>card(r,s.cl)).join('')}</div>
+    </div>`).join('');
+
+  document.getElementById('stocksArea').innerHTML = html ||
+    `<div class="empty"><div class="empty-ico">✅</div><h3>此分類無資料</h3></div>`;
+}
+
+function isPrio(ind){ return ind&&PRIO.some(p=>(ind||'').includes(p)); }
+function fmt(v,d=1){ return v!=null?Number(v).toFixed(d):'N/A'; }
+function fmtPct(v){ return v!=null?(v>=0?'+':'')+fmt(v,1)+'%':'N/A'; }
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function card(r, cl){
+  const ind  = r.industry||'';
+  const prio = isPrio(ind);
+  const fq   = r.fin_quality||{};
+  const gm   = fq.gross_margin_q1, om = fq.op_margin_q1, ic = fq.interest_coverage;
+  const finP = fq.fin_pass;
+  const finIco = finP===true?'✅':finP===false?'❌':'─';
+  const finCls = finP===true?'ok':finP===false?'bad':'';
+  const kThr   = parseInt((document.getElementById('pK')||{value:30}).value)||30;
+  const k = r.k60; const kN = Number(k);
+  const kCls   = kN<=kThr?'ok':kN<=kThr+15?'warn':'';
+  const mg = r.mom_grade||'NA';
+  const momCls = mg==='A'?'ok':mg==='W'?'bad':mg==='C'?'warn':'';
+  const momIco = {A:'✅',B:'~',C:'⚠',W:'🔴',NA:'?'}[mg]||'?';
+  const vol = r.vol_surge||{};
+  const volIco = vol.level==='best'?'🚀':vol.level==='watch'?'⚡':vol.level==='consec'?'📶':'';
+  const yoy = r.yoy_m1!=null?r.yoy_m1:fq.yoy_m1;
+  const badgeTxt = cl==='etf-s'?'ETF🟢':cl==='etf-b'?'ETF🟡':
+                   cl==='exit'?'出場':cl==='watch'?'觀察':cl==='fin'?'財務擋':cl+'類';
+  const failNote = (fq.fin_fail_reasons||[]).length?
+    `<div class="sc-note">❌ ${esc((fq.fin_fail_reasons||[]).join('、'))}</div>`:'';
+
+  return `<div class="sc ${esc(cl)}">
+    <div class="sc-top">
+      <span class="sc-code">${esc(r.tid)}</span>
+      <span class="sc-name">${esc(r.name)}</span>
+      <span class="sc-ind ${prio?'p':''}">${prio?'🏆 ':''}${esc(ind)}</span>
+      <span class="sc-badge b-${esc(cl)}">${badgeTxt}</span>
+    </div>
+    <div class="metrics">
+      <span class="pill">${fmt(r.price,2)} 元</span>
+      <span class="pill ${kCls}">K=${k!=null?fmt(k,0):'N/A'}</span>
+      <span class="pill">20MA ${fmt(r.ma20,1)}</span>
+      <span class="pill">42MA ${fmt(r.ma42,1)}</span>
+      <span class="pill">60MA ${fmt(r.ma60,1)}</span>
+      <span class="pill ${r.ma42_rising?'ok':'warn'}">42MA${r.ma42_rising?'↑':'↓'}</span>
+      <span class="pill ${r.dif_above_signal?'ok':''}">DIF${r.dif_above_signal?'✅':'─'}</span>
+      ${yoy!=null?`<span class="pill ok">YOY ${fmtPct(yoy)}</span>`:''}
+      <span class="pill ${momCls}">MoM${momIco}${r.mom_pct!=null?fmtPct(r.mom_pct):'N/A'}</span>
+      <span class="pill ${finCls}">財務${finIco} 毛${gm!=null?fmt(gm,0)+'%':'─'} 營${om!=null?fmt(om,0)+'%':'─'}</span>
+      ${ic!=null?`<span class="pill ${ic>15?'ok':'warn'}">保障${fmt(ic,0)}x</span>`:''}
+      ${volIco?`<span class="pill ok">${volIco} 量增</span>`:''}
+      ${r.channel?.alert?`<span class="pill warn">通道${esc(r.channel.alert)}</span>`:''}
+    </div>
+    ${failNote}
+  </div>`;
+}
+</script>
+</body>
+</html>

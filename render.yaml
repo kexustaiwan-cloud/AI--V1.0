@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: taiwan-stock-scanner
+    env: python
+    buildCommand: pip install -r requirements.txt
+    # 1 worker：掃描狀態存記憶體，多 worker 會對不起來
+    startCommand: gunicorn app:app --workers 1 --threads 8 --worker-class gthread --timeout 300 --bind 0.0.0.0:$PORT
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SCAN_TIMEOUT_SEC
+        value: "270"
+      - key: ADMIN_PASSWORD
+        value: "admin_bob0309"
