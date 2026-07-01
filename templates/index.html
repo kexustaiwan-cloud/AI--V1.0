@@ -434,7 +434,10 @@ async function pollStatus() {
     if (s.error) {
       dot.className = 'auto-status-dot err';
       text.textContent = '上次掃描發生錯誤，等待下次重試';
+      const lastLog = (s.log || []).slice(-1)[0] || '';
+      showError(`上次掃描失敗：${s.error}${lastLog ? '　（最後步驟：' + lastLog.replace(/\[\d+:\d+:\d+\]\s*/, '') + '）' : ''}`);
     } else if (s.running) {
+      hideError();
       dot.className = 'auto-status-dot busy';
       const lastLog = (s.log || []).slice(-1)[0] || '';
       const msg = lastLog.replace(/\[\d+:\d+:\d+\]\s*/, '');
@@ -447,6 +450,7 @@ async function pollStatus() {
         btn2.childNodes[btn2.childNodes.length - 1].textContent = ' 中斷並重新套用條件';
       }
     } else {
+      hideError();
       dot.className = 'auto-status-dot live';
       text.textContent = '系統運作中（自動排程）';
       const btn2 = document.getElementById('manualScanBtn');
@@ -707,6 +711,12 @@ function showError(msg) {
   const b = document.getElementById('errorBox');
   b.style.display = '';
   b.innerHTML = `<div class="error-box">⚠️ ${escHtml(msg)}</div>`;
+}
+
+function hideError() {
+  const b = document.getElementById('errorBox');
+  b.style.display = 'none';
+  b.innerHTML = '';
 }
 
 async function triggerManualScan() {

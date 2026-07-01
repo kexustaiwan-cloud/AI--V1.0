@@ -494,22 +494,43 @@ def _run_one_scan(gen=None):
         _add_log('掃描主動式ETF...', 57)
         active_etfs   = sc.fetch_active_etf_list(force=True)
         active_params = sc.get_active_params(datetime.now(TW_TZ))
-        etf_results   = [_result_to_dict(sc.analyze_etf(t,n,active_params))
-                         for t,n in active_etfs.items()]
-        _add_log(f'ETF完成：{len(etf_results)} 檔', 62)
+        etf_results = []
+        etf_fail_n  = 0
+        for t, n in active_etfs.items():
+            try:
+                etf_results.append(_result_to_dict(sc.analyze_etf(t, n, active_params)))
+            except Exception as e:
+                etf_fail_n += 1
+                app.logger.warning(f'ETF {t}({n}) 分析失敗，已跳過：{e}')
+                etf_results.append(_result_to_dict({
+                    'tid': t, 'name': n, 'is_etf': True, 'error': f'分析失敗：{e}',
+                }))
+        _add_log(f'ETF完成：{len(etf_results)} 檔' + (f'（{etf_fail_n} 檔失敗已跳過）' if etf_fail_n else ''), 62)
         _check_cancel(gen)
         _add_log(f'個股掃描共 {len(scan_st)} 檔...', 65)
         results = []; total = len(scan_st) or 1
+        fail_n = 0
         for i,(tid,name) in enumerate(scan_st.items()):
             _check_cancel(gen)
-            r = sc.analyze_stock(tid, name, sc._guess_mtype(tid),
-                                 entry_price=None, active_params=active_params,
-                                 mom_pct=sc.get_mom_pct(tid,fund_df,mom_dict),
-                                 fin_quality=fin_dict.get(tid))
+            try:
+                r = sc.analyze_stock(tid, name, sc._guess_mtype(tid),
+                                     entry_price=None, active_params=active_params,
+                                     mom_pct=sc.get_mom_pct(tid,fund_df,mom_dict),
+                                     fin_quality=fin_dict.get(tid))
+            except Exception as e:
+                # ★ 修正：單一個股分析失敗（壞資料/暫時性網路異常/NaN邊界情況等）
+                # 不應該讓「整輪 200+ 檔」的掃描全部作廢。跳過這一檔、記錄原因，
+                # 其餘個股照常完成，最後在 log 顯示總共有幾檔被跳過。
+                fail_n += 1
+                app.logger.warning(f'個股 {tid}({name}) 分析失敗，已跳過：{e}')
+                r = {'tid': tid, 'name': name, 'mtype': sc._guess_mtype(tid),
+                     'error': f'分析失敗：{e}'}
             results.append(_result_to_dict(r))
             pct = 65 + int((i+1)/total*32)
             if (i+1) % 5 == 0 or (i+1) == total:
-                _add_log(f'個股進度 {i+1}/{total}', pct)
+                _add_log(f'個股進度 {i+1}/{total}' + (f'（{fail_n}檔失敗）' if fail_n else ''), pct)
+        if fail_n:
+            _add_log(f'⚠️ 個股掃描完成，其中 {fail_n}/{total} 檔分析失敗已跳過')
         fp = sum(1 for c in stocks if fin_dict.get(c,{}).get('fin_pass') is True)
         ff = sum(1 for c in stocks if fin_dict.get(c,{}).get('fin_pass') is False)
         now = _now_tw()
