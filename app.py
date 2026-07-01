@@ -307,7 +307,8 @@ def admin_toggle_trial(tid):
 #   4. 全體使用者共用同一份最新結果（_state），只讀不寫。
 # =============================================================================
 
-SCAN_TIMEOUT_SEC = int(os.environ.get('SCAN_TIMEOUT_SEC', '270'))
+SCAN_TIMEOUT_SEC   = int(os.environ.get('SCAN_TIMEOUT_SEC',   '270'))
+SCAN_INTERVAL_SEC  = int(os.environ.get('SCAN_INTERVAL_SEC',  '600'))  # 預設10分鐘
 
 # 預設篩選參數（管理員可在 UI 上調整）
 _DEFAULT_PARAMS = {
@@ -316,27 +317,33 @@ _DEFAULT_PARAMS = {
     'gross_margin_min':float(os.environ.get('SCAN_GROSS_MARGIN_MIN','25')),
     'op_margin_min':   float(os.environ.get('SCAN_OP_MARGIN_MIN',   '15')),
     'fin_block':       os.environ.get('SCAN_FIN_BLOCK','true').lower() != 'false',
+    'interval_min':    int(os.environ.get('SCAN_INTERVAL_MIN', '10')),  # 循環間隔（分鐘）
 }
 
 # 全域掃描狀態（一把鎖保護）
 _state_lock = threading.Lock()
 _state = {
-    'running':   False,
-    'progress':  0,
-    'log':       [],          # 最新 log 訊息（最多200筆）
-    'last_log':  '',          # 最新一筆訊息（給進度條用）
-    'error':     None,
-    'last_scan': None,
-    'results':   None,
-    'etf_results': None,
-    'regime':    None,
-    'stats':     {},
-    'params':    dict(_DEFAULT_PARAMS),
+    'running':       False,
+    'loop_active':   False,   # 是否在循環掃描模式
+    'progress':      0,
+    'log':           [],
+    'last_log':      '',
+    'error':         None,
+    'last_scan':     None,
+    'next_scan_eta': None,    # 下次掃描預計時間（ISO字串）
+    'results':       None,
+    'etf_results':   None,
+    'regime':        None,
+    'stats':         {},
+    'params':        dict(_DEFAULT_PARAMS),
 }
 
 # 看門狗用的世代編號（每次新掃描 +1，讓舊的孤兒執行緒自動失效）
 _gen = 0
 _gen_lock = threading.Lock()
+
+# 循環控制旗標（設定後讓 loop 執行緒退出等待、結束循環）
+_loop_stop_event = threading.Event()
 
 def _new_gen():
     global _gen
@@ -516,7 +523,7 @@ def _run_scan(gen, params):
 
 
 def _run_with_watchdog(gen, params):
-    """帶看門狗的掃描，超過 SCAN_TIMEOUT_SEC 自動放棄"""
+    """執行一次掃描（帶看門狗），阻塞直到完成或逾時。"""
     worker = threading.Thread(target=_run_scan, args=(gen, params), daemon=True)
     worker.start()
     worker.join(timeout=SCAN_TIMEOUT_SEC)
@@ -525,6 +532,45 @@ def _run_with_watchdog(gen, params):
                    error=f'掃描逾時（超過 {SCAN_TIMEOUT_SEC} 秒），'
                          f'請確認 yfinance / 撿股讚 是否可連線')
         _log(f'⏱ 掃描逾時（>{SCAN_TIMEOUT_SEC}秒）')
+
+
+def _loop_thread(params):
+    """
+    循環掃描主執行緒：
+      1. 執行一次掃描（帶看門狗）
+      2. 掃描完成後等待 interval_min 分鐘（期間可被 stop 打斷）
+      3. 若未被中斷，重複步驟 1
+    整個 loop 跑在獨立 daemon thread，管理員按「中斷」時
+    _loop_stop_event 被 set，loop 退出。
+    """
+    _loop_stop_event.clear()
+    interval_sec = int(params.get('interval_min', 10)) * 60
+
+    while not _loop_stop_event.is_set():
+        # ── 執行一輪掃描 ──────────────────────────────────────────────────────
+        gen = _new_gen()
+        _set_state(running=True, progress=2, error=None, last_log='準備中...')
+        _run_with_watchdog(gen, params)
+
+        # 掃描被外部中斷（世代失效）→ 退出 loop
+        if not _is_cur_gen(gen):
+            break
+
+        # 掃描完成（不管成功還是逾時），檢查是否要繼續循環
+        if _loop_stop_event.is_set():
+            break
+
+        # ── 等待下次掃描 ──────────────────────────────────────────────────────
+        next_eta = (_now_tw() + timedelta(seconds=interval_sec)).isoformat()
+        _set_state(loop_active=True, next_scan_eta=next_eta)
+        _log(f'⏱ 等待 {params.get("interval_min",10)} 分鐘後自動重新掃描...')
+
+        # 用 wait(timeout) 取代 sleep，這樣 stop 事件可以即時打斷等待
+        _loop_stop_event.wait(timeout=interval_sec)
+
+    # loop 結束（被中斷或 stop 觸發）
+    _set_state(loop_active=False, next_scan_eta=None)
+    _log('⏹ 循環掃描已停止')
 
 # =============================================================================
 # 掃描 Routes
@@ -537,42 +583,53 @@ def index():
 @app.route('/api/scan/start', methods=['POST'])
 @admin_required
 def api_scan_start():
-    """管理員：套用新參數並開始掃描（若已在跑則先中斷）"""
-    with _state_lock:
-        if _state['running']:
-            # 讓舊世代失效（孤兒執行緒會自動忽略後續寫入）
-            _new_gen()
-            _state['running'] = False
-            _state['error']   = None
-            _log('⏹ 舊掃描已中斷')
+    """
+    管理員：啟動循環掃描。
+    - 解析新參數（含 interval_min 循環間隔）
+    - 若目前有掃描/循環在跑，先強制中斷
+    - 在新 daemon thread 啟動 _loop_thread
+    """
+    # 先停止任何現有循環
+    _loop_stop_event.set()     # 打斷等待中的 loop
+    _new_gen()                 # 讓正在跑的掃描 worker 失效
+    time.sleep(0.1)            # 讓 loop 有機會感知到 stop
+    _loop_stop_event.clear()   # 重置，給新 loop 用
 
     body = request.get_json(silent=True) or {}
     params = dict(_DEFAULT_PARAMS)
-    for k in ('k_threshold','yoy_min','gross_margin_min','op_margin_min','fin_block'):
+    for k in ('k_threshold','yoy_min','gross_margin_min','op_margin_min','fin_block','interval_min'):
         if body.get(k) is not None:
-            params[k] = (bool(body[k]) if k == 'fin_block'
-                         else (int(body[k]) if k == 'k_threshold'
-                               else float(body[k])))
+            if k == 'fin_block':
+                params[k] = bool(body[k])
+            elif k == 'k_threshold':
+                params[k] = int(body[k])
+            elif k == 'interval_min':
+                params[k] = max(1, int(body[k]))   # 最少1分鐘
+            else:
+                params[k] = float(body[k])
 
-    gen = _new_gen()
-    _set_state(running=True, progress=2, error=None,
-               log=[], last_log='準備中...', params=dict(params))
+    _set_state(running=False, loop_active=True, progress=0,
+               error=None, log=[], last_log='啟動中...', params=dict(params))
 
-    threading.Thread(target=_run_with_watchdog, args=(gen, params), daemon=True).start()
-    return jsonify({'ok': True,
-                    'message': f'掃描已啟動 — K≤{params["k_threshold"]} / YOY≥{params["yoy_min"]}%'})
+    threading.Thread(target=_loop_thread, args=(params,), daemon=True).start()
+
+    return jsonify({
+        'ok': True,
+        'message': (f'循環掃描已啟動 — K≤{params["k_threshold"]} / '
+                    f'YOY≥{params["yoy_min"]}% / 每 {params["interval_min"]} 分鐘自動重掃')
+    })
+
 
 @app.route('/api/scan/stop', methods=['POST'])
 @admin_required
 def api_scan_stop():
-    """管理員：中斷目前掃描"""
-    with _state_lock:
-        if not _state['running']:
-            return jsonify({'ok': True, 'message': '目前沒有正在執行的掃描'})
-    _new_gen()   # 讓現有執行緒變孤兒
-    _set_state(running=False, progress=0, error=None)
-    _log('⏹ 掃描已由管理員中斷')
-    return jsonify({'ok': True, 'message': '已中斷掃描'})
+    """管理員：中斷循環掃描（含正在執行中的這輪）"""
+    _loop_stop_event.set()   # 打斷 loop 的 wait 或標記退出
+    _new_gen()               # 讓正在跑的 worker 失效
+    _set_state(running=False, loop_active=False, progress=0,
+               error=None, next_scan_eta=None)
+    _log('⏹ 循環掃描已由管理員中斷')
+    return jsonify({'ok': True, 'message': '已中斷循環掃描'})
 
 @app.route('/api/status')
 @login_required
@@ -580,14 +637,16 @@ def api_status():
     with _state_lock:
         s = dict(_state)
     return jsonify({
-        'running':   s['running'],
-        'progress':  s['progress'],
-        'last_log':  s['last_log'],
-        'error':     s['error'],
-        'last_scan': s['last_scan'],
-        'stats':     s['stats'],
-        'params':    s['params'],
-        'log':       s['log'][-10:],
+        'running':       s['running'],
+        'loop_active':   s['loop_active'],
+        'next_scan_eta': s['next_scan_eta'],
+        'progress':      s['progress'],
+        'last_log':      s['last_log'],
+        'error':         s['error'],
+        'last_scan':     s['last_scan'],
+        'stats':         s['stats'],
+        'params':        s['params'],
+        'log':           s['log'][-10:],
     })
 
 @app.route('/api/results')
