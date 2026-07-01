@@ -73,6 +73,25 @@
   .btn-scan:disabled { opacity: 0.55; cursor: not-allowed; }
   .btn-scan:hover:not(:disabled) { opacity: 0.9; }
 
+  /* Auto-scan status */
+  .auto-status-box { background: var(--surface2); border-radius: 8px; padding: 10px 12px;
+                      border: 0.5px solid var(--border); }
+  .auto-status-row { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; }
+  .auto-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text3); flex-shrink: 0; }
+  .auto-status-dot.live { background: var(--green); animation: pulse 1.2s ease-in-out infinite; }
+  .auto-status-dot.busy { background: var(--blue); animation: pulse 1s ease-in-out infinite; }
+  .auto-status-dot.err  { background: var(--red); }
+  .auto-status-sub { font-size: 11px; color: var(--text3); margin-top: 5px; }
+  .auto-hint { font-size: 11px; color: var(--text3); margin-top: 8px; line-height: 1.5; }
+
+  .param-readonly { background: var(--surface2); border-radius: 8px; padding: 4px 12px;
+                     border: 0.5px solid var(--border); }
+  .param-readonly-row { display: flex; justify-content: space-between; align-items: center;
+                         font-size: 12px; padding: 7px 0; border-bottom: 0.5px solid var(--border); }
+  .param-readonly-row:last-child { border-bottom: none; }
+  .param-readonly-row span:first-child { color: var(--text2); }
+  .param-readonly-row span:last-child  { font-weight: 600; }
+
   /* Main area */
   .page-header { display: flex; align-items: center; gap: 12px; margin-bottom: 1.5rem; flex-wrap: wrap; }
   .page-title { font-size: 20px; font-weight: 600; }
@@ -247,47 +266,37 @@
     <div class="logo-icon">📊</div>
     <div>
       <div class="logo-text">台股掃描系統</div>
-      <div class="logo-sub">v4.9 撿股讚整合版</div>
+      <div class="logo-sub">v6.0 自動排程版</div>
     </div>
   </div>
 
   <div class="param-section">
-    <div class="param-section-title">技術參數</div>
-    <div class="param-row">
-      <div class="param-label">K值門檻（≤ 此值才進場）</div>
-      <input type="number" id="kThreshold" value="30" min="10" max="50">
+    <div class="param-section-title">⏱ 自動掃描狀態</div>
+    <div class="auto-status-box">
+      <div class="auto-status-row">
+        <span class="auto-status-dot" id="autoDot"></span>
+        <span id="autoStatusText">載入中...</span>
+      </div>
+      <div class="auto-status-sub" id="autoLastScan">上次掃描：─</div>
+      <div class="auto-status-sub" id="autoNextScan">下次掃描：─</div>
     </div>
-    <div class="param-row">
-      <div class="param-label">YOY 年增率下限 (%)</div>
-      <input type="number" id="yoyMin" value="15" min="0" max="100">
-    </div>
+    <p class="auto-hint">系統每 <b id="autoIntervalMin">15</b> 分鐘自動重新掃描一次，
+      所有登入的人看到的都是同一份最新結果，不需要也無法自己手動觸發掃描。</p>
   </div>
 
   <div class="param-section">
-    <div class="param-section-title">財務品質</div>
-    <div class="param-row">
-      <div class="param-label">毛利率門檻 (%)</div>
-      <input type="number" id="grossMargin" value="25" min="0" max="80">
-    </div>
-    <div class="param-row">
-      <div class="param-label">營業利益率門檻 (%)</div>
-      <input type="number" id="opMargin" value="15" min="0" max="60">
-    </div>
-    <div class="param-row">
-      <div class="param-label">利息保障倍數下限</div>
-      <input type="number" id="interestCover" value="15" min="1" max="100">
-    </div>
-    <div class="param-row">
-      <div class="param-label">財務篩選模式</div>
-      <select id="finBlock">
-        <option value="true">擋掉不達標</option>
-        <option value="false">僅標記</option>
-      </select>
+    <div class="param-section-title">📋 目前篩選條件（固定值）</div>
+    <div class="param-readonly" id="paramReadonly">
+      <div class="param-readonly-row"><span>K值門檻</span><span id="pK">─</span></div>
+      <div class="param-readonly-row"><span>YOY年增率下限</span><span id="pYoy">─</span></div>
+      <div class="param-readonly-row"><span>毛利率門檻</span><span id="pGm">─</span></div>
+      <div class="param-readonly-row"><span>營業利益率門檻</span><span id="pOm">─</span></div>
+      <div class="param-readonly-row"><span>財務篩選模式</span><span id="pFinBlock">─</span></div>
     </div>
   </div>
 
-  <button class="btn-scan" id="scanBtn" onclick="startScan()">
-    <span id="scanIcon">▶</span> 開始掃描
+  <button class="btn-scan" id="refreshBtn" onclick="loadResults()">
+    <span>🔄</span> 重新整理顯示
   </button>
 </aside>
 
@@ -298,6 +307,7 @@
     <span class="regime-pill" id="regimePill">尚未掃描</span>
     <span class="last-scan" id="lastScan"></span>
   </div>
+
 
   <div id="errorBox" style="display:none"></div>
 
@@ -353,56 +363,63 @@
 <script>
 const PRIO_IND = ['AI','伺服器','散熱','液冷','機殼','IC設計','半導體','晶圓','封裝','測試','設備','連接器','PCB','電路板','被動元件','網通','交換器','資安','感測器','影像','電動車','儲能','電池'];
 let allResults = [], etfResults = [], currentTab = 'all';
+let lastSeenScanTime = null;
 
-async function startScan() {
-  const btn = document.getElementById('scanBtn');
-  if (btn.disabled) return;
-  btn.disabled = true;
-  document.getElementById('scanIcon').textContent = '⏳';
-  document.getElementById('errorBox').style.display = 'none';
-  
-
-  const params = {
-    k_threshold:      parseInt(document.getElementById('kThreshold').value),
-    yoy_min:          parseFloat(document.getElementById('yoyMin').value),
-    gross_margin_min: parseFloat(document.getElementById('grossMargin').value),
-    op_margin_min:    parseFloat(document.getElementById('opMargin').value),
-    interest_cover:   parseFloat(document.getElementById('interestCover').value),
-    fin_block:        document.getElementById('finBlock').value === 'true',
-  };
-
-  try {
-    const r = await fetch('/api/scan', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(params)
-    });
-    if (!r.ok) { showError((await r.json()).error); resetBtn(); return; }
-    pollStatus();
-  } catch(e) { showError('無法連線到伺服器'); resetBtn(); }
+function fmtDT(iso) {
+  if (!iso) return '─';
+  return iso.replace('T',' ').slice(0,19);
+}
+function fmtCountdown(iso) {
+  if (!iso) return '─';
+  const diff = Math.max(0, Math.floor((new Date(iso) - new Date()) / 1000));
+  const m = Math.floor(diff/60), s = diff%60;
+  return `${m}分${String(s).padStart(2,'0')}秒後`;
 }
 
 async function pollStatus() {
-  const interval = setInterval(async () => {
-    try {
-      const s = await (await fetch('/api/status')).json();
-      const pct = s.progress || 0;
+  try {
+    const s = await (await fetch('/api/status')).json();
+
+    const dot  = document.getElementById('autoDot');
+    const text = document.getElementById('autoStatusText');
+    if (s.error) {
+      dot.className = 'auto-status-dot err';
+      text.textContent = '上次掃描發生錯誤，等待下次重試';
+    } else if (s.running) {
+      dot.className = 'auto-status-dot busy';
       const lastLog = (s.log || []).slice(-1)[0] || '';
       const msg = lastLog.replace(/\[\d+:\d+:\d+\]\s*/, '');
-      setProgress(pct, msg || '掃描中...');
+      text.textContent = `掃描中... ${msg ? '('+msg+')' : ''} ${s.progress||0}%`;
+    } else {
+      dot.className = 'auto-status-dot live';
+      text.textContent = '系統運作中（自動排程）';
+    }
 
-      if (!s.running) {
-        clearInterval(interval);
-        if (s.error) {
-          setProgress(0);
-          showError(s.error); resetBtn(); return;
-        }
-        setProgress(100, '完成！載入結果...');
-        await loadResults();
-        setTimeout(() => setProgress(0), 1200);
-        resetBtn();
-      }
-    } catch(e) { /* retry */ }
-  }, 800);
+    document.getElementById('autoLastScan').textContent = '上次掃描：' + fmtDT(s.last_scan);
+    document.getElementById('autoNextScan').textContent =
+      s.running ? '下次掃描：掃描完成後立即排程' : '下次掃描：約 ' + fmtCountdown(s.next_scan_eta);
+    document.getElementById('autoIntervalMin').textContent = Math.round((s.scan_interval_sec||900)/60);
+
+    if (s.params) {
+      document.getElementById('pK').textContent  = s.params.k_threshold ?? '─';
+      document.getElementById('pYoy').textContent= (s.params.yoy_min ?? '─') + '%';
+      document.getElementById('pGm').textContent = (s.params.gross_margin_min ?? '─') + '%';
+      document.getElementById('pOm').textContent = (s.params.op_margin_min ?? '─') + '%';
+      document.getElementById('pFinBlock').textContent = s.params.fin_block ? '擋掉不達標' : '僅標記';
+    }
+
+    setProgress(s.running ? (s.progress||0) : 0,
+                s.running ? '系統自動掃描中...' : '');
+
+    // 偵測到新的一次掃描完成 → 自動重新載入結果，所有人都會同步看到最新資料
+    if (s.last_scan && s.last_scan !== lastSeenScanTime && !s.running) {
+      lastSeenScanTime = s.last_scan;
+      await loadResults();
+    } else if (lastSeenScanTime === null && s.last_scan) {
+      lastSeenScanTime = s.last_scan;
+      await loadResults();
+    }
+  } catch(e) { /* 忽略，下次再試 */ }
 }
 
 function setProgress(pct, msg) {
@@ -410,20 +427,22 @@ function setProgress(pct, msg) {
   const banner = document.getElementById('scanStatusBanner');
   if (pct > 0 && pct < 100) {
     banner.style.display = 'flex';
-    document.getElementById('scanStatusText').textContent =
-      (msg || '掃描中...') + '  ' + pct + '%';
+    document.getElementById('scanStatusText').textContent = (msg || '掃描中...') + '  ' + pct + '%';
   } else {
     banner.style.display = 'none';
   }
 }
 
+let currentScanParams = null;
+
 async function loadResults() {
   const r = await fetch('/api/results');
-  if (!r.ok) { showError('無法取得結果'); return; }
+  if (!r.ok) { return; }  // 第一次掃描完成前屬正常狀態，不顯示錯誤
   const data = await r.json();
 
   allResults = data.results || [];
   etfResults = data.etf_results || [];
+  currentScanParams = data.params || currentScanParams;
   const regime = data.regime || {};
   const stats  = data.stats || {};
 
@@ -457,9 +476,12 @@ async function loadResults() {
   renderTabs();
   renderTab(currentTab);
 
-  const mainPane = document.getElementById('mainPane');
-  if (mainPane) mainPane.scrollTop = 0;
-  window.scrollTo(0, 0);
+  if (!hasScrolledOnce) {
+    hasScrolledOnce = true;
+    const mainPane = document.getElementById('mainPane');
+    if (mainPane) mainPane.scrollTop = 0;
+    window.scrollTo(0, 0);
+  }
 }
 
 function renderTabs() {
@@ -553,7 +575,7 @@ function renderCard(r, grade) {
   const finCls  = finPass === true ? 'ok' : finPass === false ? 'bad' : '';
 
   const k = r.k60; const kNum = Number(k);
-  const kThr = parseInt(document.getElementById('kThreshold').value);
+  const kThr = (currentScanParams && currentScanParams.k_threshold) || 30;
   const kCls = kNum <= kThr ? 'ok' : kNum <= kThr + 15 ? 'warn' : '';
 
   const momGrade = r.mom_grade || 'NA';
@@ -604,19 +626,10 @@ function showError(msg) {
   b.innerHTML = `<div class="error-box">⚠️ ${escHtml(msg)}</div>`;
 }
 
-function resetBtn() {
-  const btn = document.getElementById('scanBtn');
-  btn.disabled = false;
-  document.getElementById('scanIcon').textContent = '▶';
-}
-
-// Auto-load if results exist
-(async () => {
-  try {
-    const s = await (await fetch('/api/status')).json();
-    if (s.last_scan) await loadResults();
-  } catch(e) {}
-})();
+// ── 啟動：立刻拉一次狀態，之後每5秒輪詢，偵測到新掃描完成就自動更新畫面 ──
+let hasScrolledOnce = false;
+pollStatus();                              // 立刻執行一次
+setInterval(pollStatus, 5000);            // 之後每5秒更新狀態列（進度條/時鐘）
 
 async function doLogout() {
   await fetch('/api/auth/logout', { method: 'POST' });

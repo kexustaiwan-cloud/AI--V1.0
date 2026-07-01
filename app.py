@@ -322,25 +322,47 @@ def admin_toggle_trial(tid):
     return jsonify({'ok': True, 'is_active': new_val})
 
 # =============================================================================
-# Scanner Routes
+# Scanner Engine — v6.0：固定參數、背景自動定時掃描、結果廣播給所有人
+#
+#   設計理念：
+#   - 不再由「使用者按按鈕」觸發掃描，改成伺服器背景執行緒，用固定參數
+#     每隔 SCAN_INTERVAL_SEC（預設900秒=15分鐘）自動掃描一次。
+#   - 全部使用者共用同一份「最新掃描結果」（_latest 全域變數），
+#     登入後只是「讀」這份結果，不會觸發任何運算，所以可以無限多人
+#     同時登入查看，完全不會互相卡住、也不會把外部資料源(yfinance/
+#     撿股讚)打爆，因為不管多少人看，對外部API的請求頻率永遠固定
+#     是「每15分鐘1次」。
+#   - 想調整篩選參數（K值門檻、YOY下限...），改下面 SCAN_PARAMS 或
+#     用 Render 環境變數覆蓋，存檔重新部署即可套用到下一次自動掃描，
+#     使用者端不能也不需要自己調整。
 # =============================================================================
-_scan_lock   = threading.Lock()
-_scan_status = {
-    'running': False, 'last_scan': None, 'results': None,
-    'etf_results': None, 'regime': None, 'stats': {},
-    'log': [], 'error': None, 'progress': 0,
+SCAN_INTERVAL_SEC = int(os.environ.get('SCAN_INTERVAL_SEC', '900'))   # 15分鐘
+SCAN_PARAMS = {
+    'k_threshold':      int(os.environ.get('SCAN_K_THRESHOLD', '30')),
+    'yoy_min':           float(os.environ.get('SCAN_YOY_MIN', '15')),
+    'gross_margin_min':  float(os.environ.get('SCAN_GROSS_MARGIN_MIN', '25')),
+    'op_margin_min':     float(os.environ.get('SCAN_OP_MARGIN_MIN', '15')),
+    'fin_block':         os.environ.get('SCAN_FIN_BLOCK', 'true').lower() != 'false',
 }
-_log_queue = queue.Queue()
+
+_latest_lock = threading.Lock()
+_latest = {
+    'running': False,            # 是否正在執行中（背景排程跑掃描的當下）
+    'last_scan': None,           # 上次完成掃描的時間（ISO字串）
+    'next_scan_eta': None,       # 預估下次掃描時間（ISO字串）
+    'results': None, 'etf_results': None, 'regime': None, 'stats': {},
+    'log': [], 'error': None, 'progress': 0,
+    'params': SCAN_PARAMS,
+}
 
 def _add_log(msg: str, progress: int = None):
-    ts    = _now_tw().strftime('%H:%M:%S')
-    entry = f'[{ts}] {msg}'
-    _scan_status['log'].append(entry)
-    if len(_scan_status['log']) > 200:
-        _scan_status['log'] = _scan_status['log'][-200:]
-    if progress is not None:
-        _scan_status['progress'] = min(progress, 99)
-    _log_queue.put(entry)
+    with _latest_lock:
+        ts    = _now_tw().strftime('%H:%M:%S')
+        _latest['log'].append(f'[{ts}] {msg}')
+        if len(_latest['log']) > 200:
+            _latest['log'] = _latest['log'][-200:]
+        if progress is not None:
+            _latest['progress'] = min(progress, 99)
 
 _core = None
 _core_lock = threading.Lock()
@@ -349,10 +371,8 @@ def get_core():
     global _core
     with _core_lock:
         if _core is None:
-            _add_log('載入核心模組...', 2)
             import scanner_core as sc
             _core = sc
-            _add_log('核心模組載入完成', 5)
         return _core
 
 def _result_to_dict(r: dict) -> dict:
@@ -366,19 +386,28 @@ def _result_to_dict(r: dict) -> dict:
             except: out[k] = str(v)
     return out
 
-def _run_scan_thread(params: dict):
-    sc = get_core()
-    sc.K_THRESHOLD       = params.get('k_threshold', 30)
-    sc.YOY_MIN_PCT       = params.get('yoy_min', 15.0)
-    sc.GROSS_MARGIN_MIN  = params.get('gross_margin_min', 25.0)
-    sc.OP_MARGIN_MIN     = params.get('op_margin_min', 15.0)
-    sc.FIN_BLOCK_ON_FAIL = params.get('fin_block', True)
+def _run_one_scan():
+    """執行一次完整掃描，更新全域共用結果（所有人看到的都是同一份）"""
+    with _latest_lock:
+        _latest['running'] = True
+        _latest['error'] = None
+        _latest['log'] = []
+        _latest['progress'] = 2
     try:
+        sc = get_core()
+        sc.K_THRESHOLD       = SCAN_PARAMS['k_threshold']
+        sc.YOY_MIN_PCT       = SCAN_PARAMS['yoy_min']
+        sc.GROSS_MARGIN_MIN  = SCAN_PARAMS['gross_margin_min']
+        sc.OP_MARGIN_MIN     = SCAN_PARAMS['op_margin_min']
+        sc.FIN_BLOCK_ON_FAIL = SCAN_PARAMS['fin_block']
+
         _add_log('抓取撿股讚基本面資料...', 8)
         fund_df, html = sc.fetch_wespai_fundamental(force=True)
         if fund_df.empty:
-            _scan_status['error'] = '無法取得撿股讚資料，請稍後重試'
-            _scan_status['running'] = False; return
+            with _latest_lock:
+                _latest['error'] = '無法取得撿股讚資料，下次排程會重試'
+                _latest['running'] = False
+            return
         _add_log(f'撿股讚抓到 {len(fund_df)} 檔', 18)
         fund_set = sc.build_fundamental_filter(fund_df)
         stocks   = sc.build_yoy_stocks(fund_df, fund_set)
@@ -402,7 +431,7 @@ def _run_scan_thread(params: dict):
                          for t,n in active_etfs.items()]
         _add_log(f'ETF完成：{len(etf_results)} 檔', 62)
         _add_log(f'個股掃描共 {len(scan_st)} 檔...', 65)
-        results = []; total = len(scan_st)
+        results = []; total = len(scan_st) or 1
         for i,(tid,name) in enumerate(scan_st.items()):
             r = sc.analyze_stock(tid, name, sc._guess_mtype(tid),
                                  entry_price=None, active_params=active_params,
@@ -414,54 +443,83 @@ def _run_scan_thread(params: dict):
                 _add_log(f'個股進度 {i+1}/{total}', pct)
         fp = sum(1 for c in stocks if fin_dict.get(c,{}).get('fin_pass') is True)
         ff = sum(1 for c in stocks if fin_dict.get(c,{}).get('fin_pass') is False)
-        _scan_status.update({
-            'running': False, 'last_scan': _now_tw().isoformat(),
-            'results': results, 'etf_results': etf_results, 'regime': regime,
-            'stats': {'total_wespai':len(fund_df),'yoy_pass':len(stocks),
-                      'fin_pass':fp,'fin_fail':ff,'scan_count':len(scan_st),
-                      'etf_count':len(etf_results),'mom_count':len(mom_dict)},
-            'error': None, 'progress': 100,
-        })
+        now = _now_tw()
+        with _latest_lock:
+            _latest.update({
+                'running': False, 'last_scan': now.isoformat(),
+                'next_scan_eta': (now + timedelta(seconds=SCAN_INTERVAL_SEC)).isoformat(),
+                'results': results, 'etf_results': etf_results, 'regime': regime,
+                'stats': {'total_wespai':len(fund_df),'yoy_pass':len(stocks),
+                          'fin_pass':fp,'fin_fail':ff,'scan_count':len(scan_st),
+                          'etf_count':len(etf_results),'mom_count':len(mom_dict)},
+                'error': None, 'progress': 100,
+            })
         _add_log(f'✅ 掃描完成！{len(results)} 檔個股 + {len(etf_results)} 檔ETF', 100)
     except Exception as e:
-        _scan_status['error']   = str(e)
-        _scan_status['running'] = False
-        _scan_status['progress']= 0
+        with _latest_lock:
+            _latest['error']   = str(e)
+            _latest['running'] = False
+            _latest['progress']= 0
         _add_log(f'❌ 錯誤：{e}')
         app.logger.error(traceback.format_exc())
+
+def _scheduler_loop():
+    """背景排程：開機先跑一次，之後每 SCAN_INTERVAL_SEC 秒重複執行"""
+    while True:
+        try:
+            _run_one_scan()
+        except Exception:
+            app.logger.error(traceback.format_exc())
+        with _latest_lock:
+            eta = (_now_tw() + timedelta(seconds=SCAN_INTERVAL_SEC)).isoformat()
+            if not _latest.get('next_scan_eta'):
+                _latest['next_scan_eta'] = eta
+        time.sleep(SCAN_INTERVAL_SEC)
+
+_scheduler_started = False
+_scheduler_lock = threading.Lock()
+
+def _ensure_scheduler_started():
+    global _scheduler_started
+    with _scheduler_lock:
+        if not _scheduler_started:
+            _scheduler_started = True
+            threading.Thread(target=_scheduler_loop, daemon=True).start()
+
+# Render 用 gunicorn 啟動，匯入 app.py 模組時就把背景排程啟動起來
+# （搭配 render.yaml 固定 1 個 worker，確保只會啟動一份排程，不會重複掃描）
+_ensure_scheduler_started()
 
 @app.route('/')
 @login_required
 def index():
     return render_template('index.html')
 
-@app.route('/api/scan', methods=['POST'])
-@login_required
-def api_scan():
-    with _scan_lock:
-        if _scan_status['running']:
-            return jsonify({'error': '掃描中，請稍候'}), 429
-        params = request.get_json(silent=True) or {}
-        _scan_status.update({'running':True,'error':None,'log':[],'progress':2})
-    threading.Thread(target=_run_scan_thread, args=(params,), daemon=True).start()
-    return jsonify({'status': 'started'})
-
 @app.route('/api/status')
 @login_required
 def api_status():
-    s = _scan_status
-    return jsonify({'running':s['running'],'last_scan':s['last_scan'],
-                    'stats':s['stats'],'error':s['error'],
-                    'progress':s['progress'],'log':s['log'][-5:]})
+    with _latest_lock:
+        s = dict(_latest)
+    return jsonify({
+        'running': s['running'], 'last_scan': s['last_scan'],
+        'next_scan_eta': s['next_scan_eta'],
+        'scan_interval_sec': SCAN_INTERVAL_SEC,
+        'stats': s['stats'], 'error': s['error'],
+        'progress': s['progress'], 'log': s['log'][-5:],
+        'params': s['params'],
+    })
 
 @app.route('/api/results')
 @login_required
 def api_results():
-    s = _scan_status
+    with _latest_lock:
+        s = dict(_latest)
     if s['results'] is None:
-        return jsonify({'error': '尚未掃描'}), 404
+        return jsonify({'error': '系統正在準備第一次掃描，請稍候片刻'}), 404
     return jsonify({'results':s['results'],'etf_results':s['etf_results'],
-                    'regime':s['regime'],'stats':s['stats'],'last_scan':s['last_scan']})
+                    'regime':s['regime'],'stats':s['stats'],
+                    'last_scan':s['last_scan'], 'next_scan_eta':s['next_scan_eta'],
+                    'params': s['params']})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
