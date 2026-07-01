@@ -83,6 +83,11 @@
   .auto-status-dot.err  { background: var(--red); }
   .auto-status-sub { font-size: 11px; color: var(--text3); margin-top: 5px; }
   .auto-hint { font-size: 11px; color: var(--text3); margin-top: 8px; line-height: 1.5; }
+  .viewer-badge { display: inline-block; background: var(--surface2); border: 0.5px solid var(--border2);
+                   color: var(--text2); font-size: 12px; font-weight: 600; padding: 5px 12px;
+                   border-radius: 99px; margin-bottom: 6px; }
+  .manual-msg-ok  { color: var(--green); }
+  .manual-msg-err { color: var(--red); }
 
   .param-readonly { background: var(--surface2); border-radius: 8px; padding: 4px 12px;
                      border: 0.5px solid var(--border); }
@@ -295,8 +300,22 @@
     </div>
   </div>
 
-  <button class="btn-scan" id="refreshBtn" onclick="loadResults()">
-    <span>🔄</span> 重新整理顯示
+  <!-- 管理員：手動觸發按鈕（登入後由JS根據type決定是否顯示） -->
+  <div id="adminScanBlock" style="display:none">
+    <button class="btn-scan" id="manualScanBtn" onclick="triggerManualScan()">
+      <span id="manualScanIcon">▶</span> 立刻掃描（管理員）
+    </button>
+    <div id="manualScanMsg" style="font-size:11px;margin-top:6px;display:none"></div>
+  </div>
+
+  <!-- 一般使用者：觀看模式說明 -->
+  <div id="viewerBlock" style="display:none">
+    <div class="viewer-badge">👁 觀看模式</div>
+    <p class="auto-hint">您的帳號為觀看權限，系統每 <b id="autoIntervalMin2">15</b> 分鐘自動更新結果，頁面會自動同步，無需任何操作。</p>
+  </div>
+
+  <button class="btn-scan" id="refreshBtn" onclick="loadResults()" style="background:var(--surface2);color:var(--text2);border:0.5px solid var(--border2);margin-top:8px">
+    🔄 重新整理顯示
   </button>
 </aside>
 
@@ -626,6 +645,37 @@ function showError(msg) {
   b.innerHTML = `<div class="error-box">⚠️ ${escHtml(msg)}</div>`;
 }
 
+async function triggerManualScan() {
+  const btn = document.getElementById('manualScanBtn');
+  const icon = document.getElementById('manualScanIcon');
+  const msg  = document.getElementById('manualScanMsg');
+  btn.disabled = true;
+  icon.textContent = '⏳';
+  msg.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/scan/manual', { method: 'POST' });
+    const d = await r.json();
+    msg.style.display = 'block';
+    if (r.ok) {
+      msg.className   = 'manual-msg-ok';
+      msg.textContent = '✅ ' + d.message;
+    } else {
+      msg.className   = 'manual-msg-err';
+      msg.textContent = '❌ ' + (d.error || '觸發失敗');
+    }
+  } catch(e) {
+    msg.style.display = 'block';
+    msg.className   = 'manual-msg-err';
+    msg.textContent = '❌ 連線失敗';
+  }
+
+  setTimeout(() => {
+    btn.disabled = false;
+    icon.textContent = '▶';
+  }, 3000);
+}
+
 // ── 啟動：立刻拉一次狀態，之後每5秒輪詢，偵測到新掃描完成就自動更新畫面 ──
 let hasScrolledOnce = false;
 pollStatus();                              // 立刻執行一次
@@ -642,13 +692,22 @@ async function doLogout() {
     if (!r.ok) { window.location.href = '/login'; return; }
     const d = await r.json();
     if (!d.logged_in) { window.location.href = '/login'; return; }
-    const bar = document.getElementById('authBar');
+    const bar   = document.getElementById('authBar');
     const badge = document.getElementById('authTypeBadge');
     const exp   = document.getElementById('authExp');
     badge.textContent = d.label;
-    badge.className = 'auth-type-badge ' + d.type;
-    exp.textContent = '有效至 ' + d.expires;
+    badge.className   = 'auth-type-badge ' + d.type;
+    exp.textContent   = '有效至 ' + d.expires;
     bar.style.display = 'flex';
+
+    // 根據身份決定左側面板
+    if (d.type === 'admin') {
+      document.getElementById('adminScanBlock').style.display = 'block';
+    } else {
+      document.getElementById('viewerBlock').style.display = 'block';
+      const el2 = document.getElementById('autoIntervalMin2');
+      if (el2) el2.textContent = document.getElementById('autoIntervalMin').textContent;
+    }
   } catch(e) { window.location.href = '/login'; }
 })();
 

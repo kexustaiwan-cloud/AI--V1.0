@@ -495,6 +495,19 @@ _ensure_scheduler_started()
 def index():
     return render_template('index.html')
 
+@app.route('/api/scan/manual', methods=['POST'])
+@login_required
+def api_scan_manual():
+    """只有管理員可以手動立刻觸發一次掃描（插隊在下次排程前先跑）"""
+    s = _get_session()
+    if not s or s['pw_type'] != 'admin':
+        return jsonify({'error': '需要管理員權限'}), 403
+    with _latest_lock:
+        if _latest['running']:
+            return jsonify({'error': '掃描已在執行中，請稍候'}), 429
+    threading.Thread(target=_run_one_scan, daemon=True).start()
+    return jsonify({'ok': True, 'message': '已觸發手動掃描，請稍候'})
+
 @app.route('/api/status')
 @login_required
 def api_status():
