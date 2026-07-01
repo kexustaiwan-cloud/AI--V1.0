@@ -368,15 +368,40 @@ def _add_log(msg: str, progress: int = None):
             _latest['progress'] = min(progress, 99)
 
 _core = None
-_core_lock = threading.Lock()
+_core_import_error = None
+_core_ready_event = threading.Event()
+
+def _import_core_once():
+    """在程式啟動時『只執行一次』載入 scanner_core（含 yfinance/pandas 等重量級套件）。
+
+    ★ 修正：舊寫法用 _core_lock 包住 import，如果第一次 import 真的卡住不返回，
+    這把鎖就永遠不會釋放——之後每一次新的掃描嘗試（不管是自動排程或手動按鈕）
+    都會卡在同一把「永遠拿不到」的鎖上，跟第一次卡住的原因完全無關，
+    卻讓每一輪重試看起來都『一樣卡在同個地方』。
+    新寫法：import 只在這裡執行一次，用背景執行緒跑，並且完整記錄開始/結束時間，
+    直接印到伺服器 log。之後 get_core() 只是檢查「準備好了嗎」，
+    不會再去搶鎖、也不會再觸發第二次 import。
+    """
+    global _core, _core_import_error
+    t0 = time.time()
+    print('[核心模組] 開始載入 scanner_core（含 yfinance / pandas 等）...', flush=True)
+    try:
+        import scanner_core as sc
+        _core = sc
+        print(f'[核心模組] ✅ 載入完成，耗時 {time.time()-t0:.1f} 秒', flush=True)
+    except Exception as e:
+        _core_import_error = f'{type(e).__name__}: {e}'
+        print(f'[核心模組] ❌ 載入失敗（耗時 {time.time()-t0:.1f} 秒）：{e}', flush=True)
+        traceback.print_exc()
+    finally:
+        _core_ready_event.set()
 
 def get_core():
-    global _core
-    with _core_lock:
-        if _core is None:
-            import scanner_core as sc
-            _core = sc
-        return _core
+    if not _core_ready_event.is_set():
+        raise RuntimeError('核心模組仍在載入中（首次啟動需要載入 yfinance 等套件，通常數秒到數十秒），請稍候再試一次')
+    if _core_import_error:
+        raise RuntimeError(f'核心模組載入失敗，需要修正部署環境：{_core_import_error}')
+    return _core
 
 def _result_to_dict(r: dict) -> dict:
     out = {}
@@ -582,6 +607,9 @@ def _ensure_scheduler_started():
     with _scheduler_lock:
         if not _scheduler_started:
             _scheduler_started = True
+            # 先啟動一條獨立的執行緒，只負責「一次性」載入 scanner_core，
+            # 不會擋住 Flask 本身接受請求（登入頁、儀表板照樣能正常打開）。
+            threading.Thread(target=_import_core_once, daemon=True).start()
             threading.Thread(target=_scheduler_loop, daemon=True).start()
 
 # Render 用 gunicorn 啟動，匯入 app.py 模組時就把背景排程啟動起來
